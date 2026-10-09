@@ -18,6 +18,7 @@ import asyncio
 import json
 import os
 import queue
+import secrets
 import threading
 import time
 import uuid
@@ -30,6 +31,8 @@ from .chats import ChatError, ChatStore, default_chats_path
 from .recall import asks_about_past, recall, shorten_tool
 from .search import backend_name, web_fetch, web_search
 from .session import Session
+
+_SEAT_PASSWORD = "bestcalib"
 
 _MAX_TOOL_CALLS = 8
 _MAX_FETCHES = 4
@@ -154,12 +157,14 @@ class Worker:
 
 
 def build_app(session: Session, tok, cfg, args):
-    from fastapi import FastAPI, HTTPException, Request
+    from fastapi import FastAPI, HTTPException, Request, Response
     from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
     app = FastAPI(title="token-rush")
     worker = Worker(session, tok)
     store = ChatStore(getattr(args, "chats", None) or default_chats_path())
+    seat = {"token": None, "ip": ""}
+    seat_lock = threading.Lock()
     web = os.path.join(os.path.dirname(__file__), "web", "index.html")
     served = args.served_name
     max_len = session.max_len
@@ -171,6 +176,35 @@ def build_app(session: Session, tok, cfg, args):
         key = req.headers.get("x-api-key") or req.headers.get("authorization", "").removeprefix("Bearer ").strip()
         if key != args.api_key:
             raise HTTPException(401, "invalid api key")
+
+    def client_ip(req: Request) -> str:
+        return req.client.host if req.client else ""
+
+    def seat_view(req: Request):
+        token = req.cookies.get("tr_seat")
+        with seat_lock:
+            if not seat["token"]:
+                return "empty", ""
+            if token == seat["token"]:
+                return "in", seat["ip"]
+            return "out", seat["ip"]
+
+    def take_seat(response, ip: str) -> str:
+        token = secrets.token_urlsafe(24)
+        with seat_lock:
+            seat["token"] = token
+            seat["ip"] = ip
+        response.set_cookie("tr_seat", token, httponly=True, samesite="lax", max_age=14 * 24 * 3600, path="/")
+        return token
+
+    def hold_page(req: Request, response) -> str:
+        """One browser holds the page. An empty seat is taken; a second browser is refused."""
+        state, ip = seat_view(req)
+        if state == "in":
+            return req.cookies.get("tr_seat")
+        if state == "empty":
+            return take_seat(response, client_ip(req))
+        raise HTTPException(401, {"holder": ip})
 
     def want_thinking(body: dict, proto: str) -> bool:
         if args.think == "on":
@@ -248,6 +282,27 @@ def build_app(session: Session, tok, cfg, args):
     def home():
         return FileResponse(web)
 
+    @app.get("/session")
+    def session_get(req: Request, response: Response):
+        state, ip = seat_view(req)
+        if state == "in":
+            return {"ok": True, "ip": ip}
+        if state == "empty":
+            take_seat(response, client_ip(req))
+            return {"ok": True, "ip": client_ip(req)}
+        return JSONResponse({"ok": False, "holder": ip}, status_code=401)
+
+    @app.post("/login")
+    async def session_login(req: Request, response: Response):
+        body = await req.json()
+        state, ip = seat_view(req)
+        if state == "in":
+            return {"ok": True, "ip": ip}
+        if state == "empty" or str(body.get("password") or "") == _SEAT_PASSWORD:
+            take_seat(response, client_ip(req))
+            return {"ok": True, "ip": client_ip(req)}
+        return JSONResponse({"ok": False, "holder": ip}, status_code=401)
+
     def chat_call(fn, *a):
         try:
             return fn(*a)
@@ -255,26 +310,30 @@ def build_app(session: Session, tok, cfg, args):
             raise HTTPException(400, str(e))
 
     @app.get("/chats")
-    def chats_list(req: Request):
+    def chats_list(req: Request, response: Response):
         auth(req)
+        hold_page(req, response)
         return store.list()
 
     @app.get("/chats/{chat_id}")
-    def chats_get(chat_id: str, req: Request):
+    def chats_get(chat_id: str, req: Request, response: Response):
         auth(req)
+        hold_page(req, response)
         found = chat_call(store.get, chat_id)
         if found is None:
             raise HTTPException(404, "no such chat")
         return found
 
     @app.put("/chats/{chat_id}")
-    async def chats_put(chat_id: str, req: Request):
+    async def chats_put(chat_id: str, req: Request, response: Response):
         auth(req)
+        hold_page(req, response)
         return chat_call(store.put, chat_id, await req.json())
 
     @app.delete("/chats/{chat_id}")
-    def chats_delete(chat_id: str, req: Request):
+    def chats_delete(chat_id: str, req: Request, response: Response):
         auth(req)
+        hold_page(req, response)
         if not chat_call(store.delete, chat_id):
             raise HTTPException(404, "no such chat")
         return {"ok": True}
@@ -363,6 +422,7 @@ def build_app(session: Session, tok, cfg, args):
         and ("fold", info). At most three tool executions, then one answer with the tools removed."""
         thinking = want_thinking(body, "openai")
         chat_id = body.get("chat_id") if isinstance(body.get("chat_id"), str) else ""
+        page_token = getattr(req.state, "seat_token", None)
         msgs, fold, client_msgs = await prepare_context(msgs, body, thinking, req)
         if fold:
             yield ("fold", fold)
@@ -374,6 +434,11 @@ def build_app(session: Session, tok, cfg, args):
         stops = [stops] if isinstance(stops, str) else list(stops)
         max_new = body.get("max_completion_tokens") or body.get("max_tokens") or args.max_new
         while True:
+            if page_token is not None:
+                with seat_lock:
+                    if seat["token"] != page_token:
+                        yield ("error", "你已被挤下线")
+                        return
             if await req.is_disconnected():
                 return
             text = render(tok, msgs, tools, think=thinking, reasoning_effort=body.get("reasoning_effort"))
@@ -452,13 +517,14 @@ def build_app(session: Session, tok, cfg, args):
                 tools = []
 
     @app.post("/v1/chat/completions")
-    async def chat_completions(req: Request):
+    async def chat_completions(req: Request, response: Response):
         auth(req)
         body = await req.json()
         msgs = from_openai(body.get("messages") or [])
         tools = tools_from_openai(body.get("tools")) if body.get("tool_choice") != "none" else []
         thinking = want_thinking(body, "openai")
         if body.get("server_tools"):
+            req.state.seat_token = hold_page(req, response)
             msgs = with_search_guide(msgs)
             rid, created, model = "chatcmpl-" + uuid.uuid4().hex[:24], int(time.time()), body.get("model") or served
 

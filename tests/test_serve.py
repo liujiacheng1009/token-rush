@@ -402,6 +402,27 @@ def test_search_cap_still_answers_the_question(monkeypatch):
     assert "已达到本轮搜索次数上限" not in r["choices"][0]["message"]["content"]
 
 
+def test_second_browser_takes_the_seat_with_the_password(tmp_path):
+    from fastapi.testclient import TestClient
+    from tokenrush.serve import build_app
+    args = types.SimpleNamespace(api_key=None, think="auto", temperature=0.7, top_p=0.9, max_new=512, draft="auto",
+                                 served_name="token-rush", alias=[], chats=str(tmp_path / "chats.json"))
+    app = build_app(types.SimpleNamespace(max_len=32768), None, None, args)
+    first, second = TestClient(app), TestClient(app)
+    sat = first.get("/session")
+    assert sat.status_code == 200 and sat.json()["ok"] is True
+    ip = sat.json()["ip"]
+    blocked = second.get("/session")
+    assert blocked.status_code == 401 and blocked.json()["holder"] == ip
+    assert second.post("/login", json={"password": "nope"}).status_code == 401
+    assert second.get("/chats").status_code == 401
+    taken = second.post("/login", json={"password": "bestcalib"})
+    assert taken.status_code == 200 and taken.json()["ip"] == ip
+    assert first.get("/session").status_code == 401
+    assert second.get("/chats").status_code == 200
+    assert first.get("/chats").status_code == 401
+
+
 def test_api_key_required_when_set():
     from fastapi.testclient import TestClient
     from tokenrush.serve import build_app

@@ -174,13 +174,55 @@
   }
   .actions { display: flex; justify-content: flex-end; align-items: center; margin-top: 8px; }
   #sendstop { display: flex; gap: 8px; }
+  #who { color: var(--muted); font-size: 13px; padding: 8px 4px 0; }
+  #gate {
+    position: fixed;
+    inset: 0;
+    z-index: 5;
+    background: rgba(18, 20, 16, 0.94);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #gate[hidden] { display: none; }
+  #gate form {
+    width: min(380px, 92vw);
+    background: var(--side);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  #gatewho, #gateerr { margin: 0; line-height: 1.5; }
+  #gateerr { color: var(--danger); min-height: 1.2em; }
+  #gate input {
+    font: inherit;
+    color: inherit;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
 </style>
 </head>
 <body>
 <aside>
-  <header class="side"><button id="new" type="button">新对话</button></header>
+  <header class="side">
+    <button id="new" type="button">新对话</button>
+    <div id="who"></div>
+  </header>
   <div id="list"></div>
 </aside>
+<div id="gate" hidden>
+  <form id="gateform">
+    <p id="gatewho"></p>
+    <input id="gatepw" type="password" placeholder="密码" autocomplete="current-password">
+    <button class="primary" type="submit">进入</button>
+    <p id="gateerr"></p>
+  </form>
+</div>
 <main>
   <div id="log"><div class="empty">开始一段对话</div></div>
   <form class="composer" id="form">
@@ -207,8 +249,14 @@ const stopBtn = document.getElementById("stop")
 const temp = document.getElementById("temp")
 const tempv = document.getElementById("tempv")
 const think = document.getElementById("think")
+const who = document.getElementById("who")
+const gate = document.getElementById("gate")
+const gatewho = document.getElementById("gatewho")
+const gatepw = document.getElementById("gatepw")
+const gateerr = document.getElementById("gateerr")
 
 let topP = 0.9
+let seated = false
 let catalog = []
 let current = null
 let messages = []
@@ -653,6 +701,58 @@ async function remove(id) {
   await loadCatalog()
 }
 
+function showSeat(ip) {
+  seated = true
+  gate.hidden = true
+  who.textContent = "登录 " + ip
+}
+
+function showGate(holder, kicked) {
+  seated = false
+  gate.hidden = false
+  who.textContent = ""
+  gatewho.textContent = holder
+    ? (kicked ? "你已被挤下线。当前登录：" : "当前登录：") + holder + "。输入密码后将挤掉这个用户。"
+    : "还没有人登录。"
+}
+
+async function claimSeat() {
+  const r = await fetch("/session")
+  const j = await r.json().catch(() => ({}))
+  if (r.ok) showSeat(j.ip)
+  else showGate(j.holder || "", false)
+}
+
+document.getElementById("gateform").addEventListener("submit", async (ev) => {
+  ev.preventDefault()
+  gateerr.textContent = ""
+  const r = await fetch("/login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ password: gatepw.value })
+  })
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok) {
+    gateerr.textContent = "密码不对"
+    if (j.holder) showGate(j.holder, false)
+    gateerr.textContent = "密码不对"
+    return
+  }
+  gatepw.value = ""
+  showSeat(j.ip)
+  await loadCatalog()
+  if (catalog.length) await open(catalog[0].id)
+})
+
+setInterval(async () => {
+  if (!seated) return
+  const r = await fetch("/session")
+  if (r.ok) return
+  const j = await r.json().catch(() => ({}))
+  halt(false)
+  showGate(j.holder || "", true)
+}, 2000)
+
 function setBusy(on) {
   busy = on
   sendBtn.disabled = on
@@ -720,7 +820,14 @@ document.getElementById("form").addEventListener("submit", async (ev) => {
         chat_template_kwargs: { enable_thinking: think.checked }
       })
     })
-    if (!res.ok) throw new Error((await res.text()) || res.statusText)
+    if (!res.ok) {
+      if (res.status === 401) {
+        const j = await res.json().catch(() => ({}))
+        showGate((j.detail && j.detail.holder) || j.holder || "", true)
+        return
+      }
+      throw new Error((await res.text()) || res.statusText)
+    }
     const reader = res.body.getReader()
     const dec = new TextDecoder()
     let buf = ""
@@ -736,7 +843,14 @@ document.getElementById("form").addEventListener("submit", async (ev) => {
         const data = line.slice(5).trim()
         if (data === "[DONE]") continue
         const obj = JSON.parse(data)
-        if (obj.error) throw new Error(obj.error.message || "生成失败")
+        if (obj.error) {
+          const message = obj.error.message || obj.error
+          if (String(message).includes("挤下线")) {
+            showGate("", true)
+            return
+          }
+          throw new Error(message || "生成失败")
+        }
         if (obj.fold) {
           if (!current) {
             current = { id: crypto.randomUUID().replace(/-/g, ""), title: "", created: Math.floor(Date.now() / 1000), messages: [] }
@@ -802,6 +916,7 @@ document.getElementById("form").addEventListener("submit", async (ev) => {
 })
 
 loadKatex()
+claimSeat().then(() => { if (seated) return loadCatalog().then(() => { if (catalog.length) return open(catalog[0].id) }) })
 fetch("/health").then(r => r.json()).then(h => {
   if (typeof h.top_p === "number") topP = h.top_p
   if (!localStorage.getItem("tokenrush.temperature") && typeof h.temperature === "number") {
@@ -809,8 +924,6 @@ fetch("/health").then(r => r.json()).then(h => {
     tempv.textContent = Number(temp.value).toFixed(1)
   }
 }).catch(() => {})
-
-loadCatalog().then(() => { if (catalog.length) return open(catalog[0].id) })
 </script>
 </body>
 </html>
