@@ -152,7 +152,34 @@ def resolve_model(spec: str, download: bool = True) -> str:
         size = "size unknown"
     print(f"downloading {spec} ({size}) into the Hub cache at {os.environ.get('HF_HOME', '~/.cache/huggingface')}; "
           f"later runs read it from there", flush=True)
-    return snapshot_download(spec)
+    return _snapshot_download(spec)
+
+
+def _xet_transport_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "cas client" in text or "reconstruction" in text or "xet" in text
+
+
+def _snapshot_download(spec: str) -> str:
+    """Download a repo one file at a time.
+
+    Eight parallel workers on a slow link stall each other, and the library's
+    10s body timeout then aborts a shard that is still moving. Xet drops large
+    files mid-body (`error decoding response body`); completed files stay in
+    the cache, and the remainder is fetched over plain HTTP."""
+    from huggingface_hub import snapshot_download
+    import huggingface_hub.constants as hub_constants
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "300")
+    hub_constants.HF_HUB_DOWNLOAD_TIMEOUT = int(os.environ["HF_HUB_DOWNLOAD_TIMEOUT"])
+    try:
+        return snapshot_download(spec, max_workers=1)
+    except Exception as exc:
+        if hub_constants.HF_HUB_DISABLE_XET or not _xet_transport_error(exc):
+            raise
+        print(f"xet download of {spec} failed ({exc.__class__.__name__}); retrying over plain HTTP", flush=True)
+    os.environ["HF_HUB_DISABLE_XET"] = "1"
+    hub_constants.HF_HUB_DISABLE_XET = True
+    return snapshot_download(spec, max_workers=1)
 
 
 def not_packed_message(path: str) -> str:

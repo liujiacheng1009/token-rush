@@ -128,6 +128,6 @@ claude
 | `nvidia-smi` 连不上驱动 | 第 1 节的内核模块没装上或没 `modprobe`。内核若再升级，模块包要跟着装 `linux-modules-nvidia-595-open-<uname -r>` |
 | `no kernel image is available` | torch 不是 cu130 构建。用 `uv sync`，不要装 cu124 wheel |
 | CUDA out of memory | 服务默认 256k。改 `--max-len 32768`，或停掉别的 GPU 进程 |
-| Hub 下载超时 / 401 | 检查到 huggingface.co 的网络；需要 token 时 `hf auth login` 或设 `HF_TOKEN` |
+| Hub 下载停在 0%，或 `CAS Client Error` / `error decoding response body` | Xet 通道（`cas-server.xethub.hf.co`）在这条链路上会卡住或中途断掉。同一次运行会改走普通 HTTP，一次只下一个文件。进度条一直不动时停掉，设 `HF_HUB_DISABLE_XET=1` 再跑。需要 token 时 `hf auth login` 或设 `HF_TOKEN` |
 | Marlin 编译失败 | 需要 nvcc（这台在 `/usr/local/cuda/bin`）和 `ninja`（依赖里已有）。临时绕过：`--backend triton`，原始 decode 略快、验证步略慢 |
 | import 用了 Python 3.13 | 那是 conda。命令都走 `uv run`，它用项目自己的 3.12 |
