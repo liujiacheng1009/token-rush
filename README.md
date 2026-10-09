@@ -131,7 +131,7 @@ Every number here comes from one machine in one sitting, 2026-09-12, every rival
 | `bench/` | the measurements: decode, context sweeps, quality, needle, GSM8K |
 | `scripts/` | rival benches, the quantization recipe, table and figure generators |
 | `tests/` | the differential and protocol tests |
-| `docs/` | baselines, environment, progress, quantization, serving, traps |
+| `docs/` | baselines, environment, progress, quantization, serving, traps. A reading order is in [docs/overview.md](docs/overview.md#阅读顺序) |
 | `results/` | raw logs of every reported run |
 
 ## Author

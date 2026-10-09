@@ -4,7 +4,7 @@ Token Rush 是给 **Qwen3.8-27B、一张 RTX 5090、一个用户、一条流** �
 
 交付物是作者每天打开的本地模型，不是一个演示。`python -m tokenrush.serve` 在本机实现三套 HTTP 协议，请求不转发到 OpenAI 或 Anthropic，也不需要那两边的账号：`POST /v1/chat/completions`、`POST /v1/completions`，以及 Anthropic Messages 的 `POST /v1/messages`。算的始终是这张卡上的 Qwen3.8-27B。模型只吃 checkpoint 自带 chat template 渲染出的文本：OpenAI 和 Anthropic 的 JSON 先在 `tokenrush/chat.py` 里收成同一套消息（system / user / assistant / tool），再套模板；`/v1/completions` 不套模板，prompt 原样送进去。一次处理一个请求，对话留在 GPU 上，下一轮只 prefill 新增的 token。Claude Code 把 `ANTHROPIC_BASE_URL` 指到这个地址就会打到本地；没设 `--api-key` 时服务不校验 token，设了就只认你自己起服务时写的那串。
 
-英文性能说明、图表和用法在仓库根目录的 [README.md](../README.md)。本文只说明仓库在干什么、边界在哪、各目录是什么。
+英文性能说明、图表和用法在仓库根目录的 [README.md](../README.md)。本文说明仓库在干什么、边界在哪、各目录是什么，以及按什么顺序读。
 
 ## 要解决的问题
 
@@ -155,3 +155,40 @@ uv run python -m tokenrush.serve --port 8000
 ```
 
 这台机器上把驱动、环境和这两条命令跑通的步骤在 [demo.md](demo.md)。协议、tool calling、前缀复用在 [serving.md](serving.md)。
+
+## 阅读顺序
+
+先知道它声称什么，再看数字从哪来，最后顺着一次生成把代码走通。`CLAUDE.md`、[feasibility.md](feasibility.md)、[quality_plan.md](quality_plan.md) 先跳过：前两篇和 README 重复，后一篇是已经做完的待办。
+
+### 它是什么，数字怎么读
+
+1. [README.md](../README.md)。看三处：开头的速度表、How 那张逐步涨速的表、Quantization 那张 KL 表。读完要能分清：关掉投机大约 101 tok/s，是带宽墙的 81%；229 / 358 / 379 是一步吐出多个 token 之后的有效速度。
+2. 本文。读「要解决的问题」和「投机解码」：batch size = 1 时通用引擎白付的四笔税，以及草稿猜、正文验、只留下对上的前缀。「故意不做的事」和「目录」用来划边界。
+3. [demo.md](demo.md)。只有要在这台 5090 上把对话或服务跑起来时才读。测速度或 GSM8K 时读 [benchmark.md](benchmark.md)。
+
+### 模型为什么让这件事做得到
+
+4. [model.md](model.md)。64 层里 48 层是 Gated DeltaNet，循环状态不随上下文变长；只有 16 层注意力在付长度的钱。MTP 头是模型自带的，视觉塔加载时丢掉。文末那张表就是代码入口。
+
+### 速度是按什么顺序加上去的
+
+5. [progress.md](progress.md) 只读开头的 “Where things stand”，再按 README 那张表跳这几步：4（整步 CUDA graph）、6–7（融合 GDN 和 attention）、13–14（图内 MTP）、25–27（DFlash2）、28（Marlin 验证）。其余步骤是实验记录，先不读。
+6. 代码按一次生成的数据流走，每份只看入口和它守的不变量：
+
+| 顺序 | 文件 | 看什么 |
+|---|---|---|
+| 1 | `tokenrush/weights.py`、`quant.py` | int4g128 怎么装进显存 |
+| 2 | `tokenrush/state.py` | KV、卷积环、FP32 循环状态一次性预分配 |
+| 3 | `tokenrush/model.py` | 一层 GDN / attention / MLP |
+| 4 | `tokenrush/fused.py` | 上面那些层怎么收成一个 kernel |
+| 5 | `tokenrush/generate.py` | 贪心循环，以及整步图在哪捕获 |
+| 6 | `tokenrush/spec.py`、`mtp.py`、`dflash.py` | 草稿、验证、只提交接受前缀 |
+| 7 | `tokenrush/marlin.py`、`csrc/` | 一次验 7 个 token 的 GEMM |
+| 8 | `tokenrush/serve.py`、`session.py`、`chat.py` | 请求怎么留在 GPU 上，下一轮只 prefill 新增 token |
+
+### 要核对数字或协议时再读
+
+7. [baselines.md](baselines.md) 的 “The matrix” 和 “Method”。各家安装命令是配方，用到再翻。
+8. [quantization.md](quantization.md) 的 “Why it matters”、格式那一节和 “Where it stands”。KL 0.023 对 ExLlamaV3 的 0.013，差在码本，不在校准。
+9. [serving.md](serving.md)。关心 Claude Code 怎么接到本机时再读。
+10. [traps.md](traps.md) 和 [environment.md](environment.md)。要复现测量或改 kernel 时再读。`results/` 是原始日志，表已经由 `scripts/matrix_table.py` 和 `scripts/sweep_table.py` 生成过。
