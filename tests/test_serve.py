@@ -163,7 +163,7 @@ def test_chat_page_and_saved_transcripts(tmp_path):
                                  served_name="token-rush", alias=[], chats=str(path))
     c = TestClient(build_app(Unused(), None, None, args))
     page = c.get("/")
-    assert page.status_code == 200 and "新对话" in page.text and "写代码" in page.text and 'id="ide"' in page.text and 'id="monaco"' in page.text and "打开目录" in page.text
+    assert page.status_code == 200 and "新对话" in page.text and "写代码" in page.text and 'id="ide"' in page.text and 'id="monaco"' in page.text and 'id="vscode-frame"' in page.text and "打开目录" in page.text
     assert c.get("/chats").json() == []
     saved = c.put("/chats/abc", json={"title": "草稿", "messages": [{"role": "user", "content": "你好"}]}).json()
     assert saved["title"] == "草稿" and saved["messages"] == [{"role": "user", "content": "你好"}]
@@ -190,6 +190,25 @@ def test_chat_page_and_saved_transcripts(tmp_path):
                                          "fold": {"summary": "一段摘要", "before": 1}}).json()
     assert folded["fold"] == {"summary": "一段摘要", "before": 1}
     assert folded["messages"][0]["content"] == "原文还在"
+
+
+def test_vscode_path_is_not_the_opencode_proxy(tmp_path):
+    from fastapi.testclient import TestClient
+    from tokenrush.serve import build_app
+
+    args = types.SimpleNamespace(api_key=None, think="auto", temperature=0.7, top_p=0.9, max_new=512, draft="auto",
+                                 served_name="token-rush", alias=[], chats=str(tmp_path / "chats.json"))
+    c = TestClient(build_app(types.SimpleNamespace(max_len=32768), None, None, args))
+    for path in ("/vscode/", "/_static/src/browser/media/favicon.ico"):
+        got = c.get(path, follow_redirects=False)
+        assert "写代码没有启动" not in got.text
+        if got.status_code == 502:
+            assert got.json()["detail"] == "VS Code 没有启动"
+        else:
+            assert got.status_code in (200, 301, 302, 303, 307, 308)
+            if path == "/vscode/" and got.status_code == 200:
+                assert "workbench" in got.text
+
 
 
 def test_server_tools_search_then_cite(monkeypatch):

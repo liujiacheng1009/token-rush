@@ -78,7 +78,8 @@
   }
   header.bar button.on { color: var(--text); background: var(--user); }
   header.bar button:hover { color: var(--text); border: 0; }
-  #log[hidden], .composer[hidden], #ide[hidden], aside[hidden], #editor[hidden], #monaco[hidden], #pane-files[hidden], #pane-search[hidden] { display: none !important; }
+  #log[hidden], .composer[hidden], #ide[hidden], aside[hidden], #editor[hidden], #monaco[hidden], #pane-files[hidden], #pane-search[hidden], #vscode-frame[hidden] { display: none !important; }
+  #vscode-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: #1e1e1e; }
   #ide {
     flex: 1; min-height: 0; display: flex; flex-direction: column;
     background: #1e1e1e; color: #cccccc;
@@ -314,6 +315,7 @@
     <button id="mode-chat" class="on" type="button">对话</button>
     <button id="mode-code" type="button">写代码</button>
   </header>
+  <iframe id="vscode-frame" hidden title="VS Code"></iframe>
   <div id="ide" hidden>
     <div class="ide-bar">
       <button id="open-dir" type="button" title="打开目录"><i class="codicon codicon-folder-opened"></i></button>
@@ -1170,13 +1172,14 @@ function showCode(on) {
   document.querySelector("body > aside").hidden = on
   document.getElementById("log").hidden = on
   document.getElementById("form").hidden = on
-  ide.hidden = !on
+  ide.hidden = true
+  const frame = document.getElementById("vscode-frame")
+  frame.hidden = !on
+  if (on && !frame.getAttribute("src")) {
+    frame.src = "/vscode/?folder=" + encodeURIComponent("/home/jesse/workspace/token-rush")
+  }
   document.getElementById("mode-chat").classList.toggle("on", !on)
   document.getElementById("mode-code").classList.toggle("on", on)
-  if (on) {
-    ensureMonaco().then(() => { if (monacoEditor) monacoEditor.layout() })
-    if (!tree.childElementCount) openWorkspace(workspace)
-  }
 }
 document.getElementById("mode-chat").addEventListener("click", () => showCode(false))
 document.getElementById("mode-code").addEventListener("click", () => showCode(true))

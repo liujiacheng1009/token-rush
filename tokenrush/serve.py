@@ -989,6 +989,128 @@ def build_app(session: Session, tok, cfg, args):
 
     app.state.t0 = time.time()
 
+    # VS Code in the browser (code-server) stays on loopback. 8080 is already
+    # another program on this machine, so the default is 8088. The browser
+    # only talks to us, under /vscode/. This route is registered before the
+    # OpenCode catch-all so /vscode is not forwarded to port 4096.
+    vscode_upstream = os.environ.get("TOKENRUSH_VSCODE_UPSTREAM", "http://127.0.0.1:8088").rstrip("/")
+
+    def vscode_location(value: str) -> str:
+        if value.startswith(vscode_upstream):
+            return value[len(vscode_upstream):] or "/"
+        return value
+
+    def vscode_headers(items):
+        drop = {"content-length", "content-encoding", "transfer-encoding", "connection"}
+        hide = {"x-frame-options", "cross-origin-opener-policy", "cross-origin-embedder-policy",
+                "cross-origin-resource-policy"}
+        out = []
+        for key, value in items:
+            low = key.lower()
+            if low in drop or low in hide:
+                continue
+            if low == "location":
+                value = vscode_location(value)
+            elif low == "content-security-policy" and "frame-ancestors" in value:
+                value = value.replace("frame-ancestors 'none'", "frame-ancestors 'self'")
+            out.append((key, value))
+        return out
+
+    @app.api_route("/vscode", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+    @app.api_route("/vscode/{full:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+    @app.api_route("/_static/{full:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+    async def vscode_proxy(req: Request, full: str = ""):
+        import httpx
+        box = Response()
+        hold_page(req, box)
+        url = vscode_upstream + req.url.path
+        if req.url.query:
+            url += "?" + req.url.query
+        skip = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
+                "trailers", "transfer-encoding", "upgrade", "content-length", "content-encoding"}
+        headers = {k: v for k, v in req.headers.items() if k.lower() not in skip}
+        headers["x-forwarded-host"] = req.headers.get("host", "")
+        headers["x-forwarded-proto"] = req.url.scheme or "http"
+        client = httpx.AsyncClient(timeout=None)
+        try:
+            upstream = await client.send(
+                client.build_request(req.method, url, headers=headers, content=await req.body()), stream=True)
+        except httpx.ConnectError:
+            await client.aclose()
+            raise HTTPException(502, "VS Code 没有启动")
+        passed = vscode_headers(upstream.headers.multi_items())
+
+        async def chunks():
+            try:
+                async for chunk in upstream.aiter_bytes():
+                    yield chunk
+            finally:
+                await upstream.aclose()
+                await client.aclose()
+
+        plain = [(k, v) for k, v in passed if k.lower() != "set-cookie"]
+        out = StreamingResponse(chunks(), status_code=upstream.status_code, headers=dict(plain))
+        for key, value in box.raw_headers:
+            if key.lower() == b"set-cookie":
+                out.raw_headers.append((key, value))
+        for key, value in passed:
+            if key.lower() == "set-cookie":
+                out.raw_headers.append((key.encode(), value.encode()))
+        return out
+
+    @app.websocket("/vscode/{full:path}")
+    async def vscode_ws(ws: WebSocket, full: str):
+        from websockets.asyncio.client import connect as ws_connect
+        if seat_view(ws)[0] != "in":
+            await ws.close(code=1008)
+            return
+        protocols = list(ws.scope.get("subprotocols") or [])
+        await ws.accept(subprotocol=protocols[0] if protocols else None)
+        url = vscode_upstream.replace("http://", "ws://", 1).replace("https://", "wss://", 1) + ws.url.path
+        if ws.url.query:
+            url += "?" + ws.url.query
+        extra = {"Origin": vscode_upstream}
+        if ws.headers.get("cookie"):
+            extra["Cookie"] = ws.headers["cookie"]
+        try:
+            remote_cm = ws_connect(url, additional_headers=extra, max_size=None, proxy=None,
+                                   subprotocols=protocols or None)
+            remote = await remote_cm.__aenter__()
+        except Exception:
+            await ws.close(code=1011)
+            return
+
+        async def from_browser():
+            try:
+                while True:
+                    msg = await ws.receive()
+                    if msg["type"] == "websocket.disconnect":
+                        return
+                    if msg.get("bytes") is not None:
+                        await remote.send(msg["bytes"])
+                    elif msg.get("text") is not None:
+                        await remote.send(msg["text"])
+            finally:
+                await remote.close()
+
+        async def from_code():
+            try:
+                async for message in remote:
+                    if isinstance(message, str):
+                        await ws.send_text(message)
+                    else:
+                        await ws.send_bytes(message)
+            finally:
+                try:
+                    await ws.close()
+                except RuntimeError:
+                    pass
+
+        try:
+            await asyncio.gather(from_browser(), from_code())
+        finally:
+            await remote_cm.__aexit__(None, None, None)
+
     # The code page is OpenCode, on this same port. Its own server stays on
     # 127.0.0.1:4096; the browser only talks to us. /seat is ours, so it does
     # not collide with OpenCode's /session.
