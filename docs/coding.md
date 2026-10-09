@@ -87,7 +87,7 @@ OpenCode 有浏览器界面。`opencode web` 在本机再起一个 HTTP 服务�
 
 中间那一块用 [Monaco Editor](https://github.com/microsoft/monaco-editor)（MIT）。它就是 VS Code 里的编辑器，从 VS Code 拆出来单独发布。换上之后有行号、按文件名上色、折叠、括号匹配、小地图、Ctrl+F 查找。页面仍是这一个 HTML，不引入构建。脚本从 jsDelivr 拉取固定版本，和页面上的 KaTeX 一样；拉不到时留着现在的文本框。
 
-侧栏和工具栏没有对应的「整块 VS Code 外壳」可以嵌。VS Code 的活动栏、文件树、标签页没有单独发布成组件。整份 VS Code 浏览器版（code-server、OpenVSCode Server）是另一个程序、另一个端口，不嵌进这一页。
+侧栏和工具栏没有对应的「整块 VS Code 外壳」可以嵌。VS Code 的活动栏、文件树、标签页没有单独发布成组件。这一步只换编辑区。新建、删除、重命名和 Git 在下一节，用浏览器里的整份 VS Code。
 
 外壳仍是我们自己的，只借图标和编辑器：
 
@@ -100,7 +100,27 @@ OpenCode 有浏览器界面。`opencode web` 在本机再起一个 HTTP 服务�
 | 工具栏 | 「打开目录」「保存」文字按钮 | 图标按钮，路径做成可点的面包屑 |
 | 右侧对话 | 留着 | 不改成编辑器的一部分 |
 
-文件仍走现有的 `/fs/list` 和 `/fs/file`。Monaco 只负责显示和编辑，保存还是 Ctrl+S 写回服务器。语言服务、调试器、插件市场不做。
+文件仍走现有的 `/fs/list` 和 `/fs/file`。Monaco 只负责显示和编辑，保存还是 Ctrl+S 写回服务器。语言服务、调试器、插件市场不做。没有新建、删除、重命名，也没有 Git。
+
+## 下一版：用浏览器里的 VS Code
+
+Monaco 补不出这些。新建文件、删除、重命名、Git 状态和提交都在 VS Code 的工作台里，没有跟编辑区一起发布。继续给这一页的侧栏加按钮，做出来仍是一套更小的外壳。下一版直接用浏览器里的 VS Code。
+
+用 [code-server](https://github.com/coder/code-server)（MIT）。打开之后就是 VS Code：资源管理器里可以新建、删除、重命名，源代码管理里是 Git，还有终端和按内容搜索。扩展从 Open VSX 装。[OpenVSCode Server](https://github.com/gitpod-io/openvscode-server) 是同一类程序，先用 code-server。
+
+公网仍然只有 `:8000`。code-server 只听 `127.0.0.1`，由现在的服务反代到 `/vscode/`。顶部「对话 / 写代码」留着。写代码时，这一页剩下的区域是它，自带的文件树和 Monaco 先不显示。
+
+右侧的对话用 Cline，装在 code-server 里面。供应商选 OpenAI Compatible，Base URL `http://127.0.0.1:8000/v1`，模型 `token-rush`，密钥写一串非空。读文件、改文件、跑命令发生在这台机器上，生成仍进现在这一条流。不做 Tab 补全。
+
+等 tokenrush 打印就绪后再起。这一版 code-server 没有 `--base-path`，它自己把 VS Code 挂在 `/vscode`。8080 上已经有别的程序，所以听 8088。认证用 none：它的 `/login` 会和聊天页的座位登录撞车，座位已经挡住 `/vscode`。从 Cursor 的终端里启动时要去掉 `VSCODE_IPC_HOOK_CLI`，否则它以为该把目录交给已经开着的编辑器，然后自己退出。
+
+```bash
+env -u VSCODE_IPC_HOOK_CLI code-server --bind-addr 127.0.0.1:8088 --auth none --disable-telemetry --disable-update-check --disable-workspace-trust /home/jesse/workspace/token-rush
+```
+
+它能改服务器上的文件、能跑命令，所以不要改成 `0.0.0.0`。服务里把 `/vscode` 和 `/_static` 转到 `127.0.0.1:8088`，这两条写在 OpenCode 的兜底反代前面，避免被转到 4096。
+
+自带的 `/fs` 和 Monaco 先留在仓库里。这一页切过去、Cline 能改一个文件之后再收。
 
 OpenCode 仍要单独启动，先等 tokenrush 打印就绪：
 
@@ -115,7 +135,7 @@ OPENCODE_SERVER_PASSWORD=bestcalib opencode web --hostname 127.0.0.1 --port 4096
 
 | | 用什么 | 引擎 |
 |---|---|---|
-| 聊天页上切到写代码，在同一页里改文档或代码 | 自带的目录、Monaco、右侧对话；文件在打开的服务器目录里 | 文件工具已在服务里。Monaco 只换显示 |
+| 聊天页上切到写代码 | 同一页里嵌 code-server（`/vscode/`）。新建、删除、Git、终端是 VS Code 的。右侧对话用里面的 Cline | 仍是这一条流。自带的 Monaco 先留着，不显示 |
 | 先计划再改 | OpenCode 自带的 plan / build | 不改 |
 | 批准、回退 | 客户端的权限和 git | 不改 |
 | 找该改的文件 | LSP 加搜索 | 不改。不做向量 |
@@ -132,7 +152,7 @@ Cline 是编辑器里的另一种客户端，不是另一套推理。Aider 留�
 ## 不做什么
 
 - 不做 Tab 补全，不加载第二份权重，不在这张卡上做嵌入索引。
-- 不在 `tokenrush/web` 里重做编辑器。写代码用 OpenCode 自己的页面，嵌在聊天页里。
+- 不再给自带的 Monaco 外壳加新建、删除和 Git。这些用 code-server。
 - 不实现 `/v1/responses`。
 - 不把 OpenCode / Cline 的配置提交进仓库。
 - 不改 bs=1。
