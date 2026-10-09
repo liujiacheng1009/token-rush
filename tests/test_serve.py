@@ -172,13 +172,72 @@ def test_chat_page_and_saved_transcripts(tmp_path):
     # a title is taken from the first user line when the client does not send one
     auto = c.put("/chats/def", json={"messages": [{"role": "user", "content": "第二段对话的开头"}]}).json()
     assert auto["title"] == "第二段对话的开头"
-    assert c.put("/chats/abc", json={"messages": [{"role": "tool", "content": "x"}]}).status_code == 400
+    tools = c.put("/chats/src", json={"messages": [
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "call_1", "type": "function", "function": {"name": "web_search", "arguments": "{\"query\": \"q\"}"}}]},
+        {"role": "tool", "name": "web_search", "tool_call_id": "call_1", "content": "https://example.com/a"},
+    ]}).json()
+    assert tools["messages"][0]["tool_calls"][0]["function"]["name"] == "web_search"
+    assert tools["messages"][1]["tool_call_id"] == "call_1"
+    assert c.put("/chats/abc", json={"messages": [{"role": "nope", "content": "x"}]}).status_code == 400
     assert c.put("/chats/bad!id", json={"messages": []}).status_code == 400
     assert c.get("/chats/abc").json()["messages"][0]["role"] == "user"   # the rejected put did not replace it
     assert c.delete("/chats/abc").status_code == 200
     assert c.get("/chats/abc").status_code == 404
     assert c.delete("/chats/abc").status_code == 404
     assert json.loads(path.read_text())["chats"][0]["id"] == "def"
+
+
+def test_server_tools_search_then_cite(monkeypatch):
+    from fastapi.testclient import TestClient
+    from tokenrush.serve import build_app
+    tok = _tok()
+    seen = []
+
+    def fake_search(query):
+        seen.append(query)
+        return "1. Example\nhttps://example.com/a\none", [{"title": "Example", "url": "https://example.com/a"}]
+
+    monkeypatch.setattr("tokenrush.serve.web_search", fake_search)
+    tool = ("<tool_call>\n<function=web_search>\n<parameter=query>\nnvidia price\n</parameter>\n"
+            "</function>\n</tool_call>")
+    sess = StubSession(tok, tool)
+    sess.replies = [tool, "See https://example.com/a for the price."]
+    orig = sess.generate
+
+    def generate(ids, max_new, mode, temperature, top_p, top_k, seed):
+        sess.reply = sess.replies.pop(0)
+        yield from orig(ids, max_new, mode, temperature, top_p, top_k, seed)
+
+    sess.generate = generate
+    args = types.SimpleNamespace(api_key=None, think="auto", temperature=0.7, top_p=0.9, max_new=512, draft="auto",
+                                 served_name="token-rush", alias=[], chats=None)
+    c = TestClient(build_app(sess, tok, types.SimpleNamespace(eos_ids=(tok.eos_token_id,)), args))
+    r = c.post("/v1/chat/completions", json={"model": "m", "server_tools": True,
+                                            "messages": [{"role": "user", "content": "price?"}]}).json()
+    assert seen == ["nvidia price"]
+    assert "https://example.com/a" in r["choices"][0]["message"]["content"]
+    second = tok.decode(sess.prompts[1][0])
+    assert "https://example.com/a" in second and "<tool_response>" in second
+
+
+def test_without_server_tools_does_not_search(monkeypatch):
+    from fastapi.testclient import TestClient
+    from tokenrush.serve import build_app
+    tok = _tok()
+
+    def boom(query):
+        raise AssertionError("search must not run")
+
+    monkeypatch.setattr("tokenrush.serve.web_search", boom)
+    tool = ("<tool_call>\n<function=web_search>\n<parameter=query>\nnvidia price\n</parameter>\n"
+            "</function>\n</tool_call>")
+    args = types.SimpleNamespace(api_key=None, think="auto", temperature=0.7, top_p=0.9, max_new=512, draft="auto",
+                                 served_name="token-rush", alias=[], chats=None)
+    c = TestClient(build_app(StubSession(tok, tool), tok, types.SimpleNamespace(eos_ids=(tok.eos_token_id,)), args))
+    r = c.post("/v1/chat/completions", json={"model": "m", "messages": [{"role": "user", "content": "price?"}]}).json()
+    assert r["choices"][0]["finish_reason"] == "tool_calls"
+    assert r["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "web_search"
 
 
 def test_api_key_required_when_set():

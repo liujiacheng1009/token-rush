@@ -18,7 +18,7 @@ uv run python -m tokenrush.serve "${args[@]}"
 
 - 不做第二个推理进程，不把权重再加载一份。
 - 不做账号、多用户、公网。页面和接口只听 `127.0.0.1`。
-- 第一版页面不检索、不上传图片。模型发出的工具调用引擎已经能解析，但不会自己执行。连网搜索的方案在 [web-search.md](web-search.md)，跨对话记忆在 [memory.md](memory.md)，都还没做。
+- 页面不上传图片。连网搜索在这一轮里由服务执行，见 [web-search.md](web-search.md)。跨对话记忆还没做，方案在 [memory.md](memory.md)。
 - 不在页面里复现 CUDA graph、草稿或量化。那些留在引擎里。
 
 ## 四层
@@ -78,7 +78,7 @@ Thinking 默认关。页面上一个开关，打开时请求带 `chat_template_k
 | `id` | 本地生成的 id |
 | `title` | 第一句用户话的前几个字，可以改 |
 | `created` | 创建时间 |
-| `messages` | `{role, content}` 数组，`role` 只有 `system`、`user`、`assistant` |
+| `messages` | `{role, content}`。搜过的一轮还会留下助手的 `tool_calls` 和 `role: tool` 的结果 |
 
 三个路由就够，都只动这个文件：
 
@@ -92,7 +92,7 @@ Thinking 默认关。页面上一个开关，打开时请求带 `chat_template_k
 
 `POST /v1/chat/completions`，body 里 `model` 随便写（服务不校验名字）、`stream: true`、`messages` 为这一段的全部消息。流式格式是 OpenAI 的 SSE：`data: {"choices":[{"delta":{"content":"..."}}]}`，结束是 `data: [DONE]`。
 
-可选的系统提示存在该对话的第一条 `system` 消息里，随 `messages` 一起发送。不设全局隐藏提示。
+可选的系统提示存在该对话的第一条 `system` 消息里，随 `messages` 一起发送。页面自己不设隐藏提示；连网那一轮服务会补上搜索说明，见 [web-search.md](web-search.md)。
 
 ## 上下文和显存
 

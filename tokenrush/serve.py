@@ -27,7 +27,25 @@ import torch
 from .chat import (OutputParser, StopFilter, from_anthropic, from_openai, render, tools_from_anthropic,
                    tools_from_openai)
 from .chats import ChatError, ChatStore, default_chats_path
+from .search import backend_name, web_fetch, web_search
 from .session import Session
+
+_MAX_TOOL_CALLS = 3
+_MAX_FETCHES = 2
+_SEARCH_GUIDE = (
+    "需要时效、或你没有把握的事实时，调用 web_search。需要某条结果的正文时，调用 web_fetch，参数是搜索结果里的 https URL。"
+    "只引用工具结果里出现过的 URL。搜索没有结果、超时或抓取失败时，直接说没查到，不要编造数字或链接。"
+)
+_SERVER_TOOLS = [
+    {"type": "function", "function": {
+        "name": "web_search",
+        "description": "Search the public web. Use for news, prices, and facts you are not sure about.",
+        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+    {"type": "function", "function": {
+        "name": "web_fetch",
+        "description": "Fetch the readable text of one https page returned by web_search.",
+        "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}}},
+]
 
 # ------------------------------------------------------------ the worker
 
@@ -264,6 +282,89 @@ def build_app(session: Session, tok, cfg, args):
 
     # ---------------------------------------------------------------- OpenAI
 
+    def with_search_guide(msgs):
+        msgs = [dict(m) for m in msgs]
+        if msgs and msgs[0].get("role") == "system":
+            if _SEARCH_GUIDE not in (msgs[0].get("content") or ""):
+                msgs[0]["content"] = ((msgs[0].get("content") or "") + "\n\n" + _SEARCH_GUIDE).strip()
+        else:
+            msgs.insert(0, {"role": "system", "content": _SEARCH_GUIDE})
+        return msgs
+
+    async def tool_rounds(body, msgs, req: Request):
+        """Yields the same worker events, plus ("search", info) and ("tool_result", info).
+        At most three tool executions, then one answer with the tools removed."""
+        tools = list(_SERVER_TOOLS)
+        fetches = 0
+        used = 0
+        stops = body.get("stop") or []
+        stops = [stops] if isinstance(stops, str) else list(stops)
+        max_new = body.get("max_completion_tokens") or body.get("max_tokens") or args.max_new
+        thinking = want_thinking(body, "openai")
+        while True:
+            if await req.is_disconnected():
+                return
+            text = render(tok, msgs, tools, think=thinking, reasoning_effort=body.get("reasoning_effort"))
+            try:
+                job = make_job(encode(text), body, max_new, stops, schemas_of(tools), thinking, text)
+            except HTTPException as exc:
+                yield ("error", exc.detail)
+                return
+            texts, thinks, calls, done = [], [], [], None
+            async for kind, v in events(job, req):
+                if kind == "text":
+                    texts.append(v)
+                    yield ("text", v)
+                elif kind == "thinking":
+                    thinks.append(v)
+                    yield ("thinking", v)
+                elif kind == "tool_call":
+                    calls.append(v)
+                elif kind == "error":
+                    yield ("error", v)
+                    return
+                elif kind == "done":
+                    done = v
+            if done is None:
+                return
+            if not calls or not tools:
+                if calls and not ("".join(texts).strip()):
+                    yield ("text", "已达到本轮搜索次数上限。")
+                yield ("done", done)
+                return
+            executed = []
+            for call in calls:
+                if used >= _MAX_TOOL_CALLS:
+                    break
+                if call.name not in ("web_search", "web_fetch"):
+                    yield ("text", f"不会执行这个工具：{call.name}")
+                    yield ("done", done)
+                    return
+                query = str((call.arguments or {}).get("query") or (call.arguments or {}).get("url") or "")
+                yield ("search", {"tool": call.name, "query": query})
+                if call.name == "web_fetch" and fetches >= _MAX_FETCHES:
+                    result, sources = "本轮最多打开 2 个页面。", []
+                elif call.name == "web_search":
+                    result, sources = await asyncio.to_thread(web_search, query)
+                else:
+                    result, sources = await asyncio.to_thread(web_fetch, query)
+                    if not result.startswith("拒绝"):
+                        fetches += 1
+                used += 1
+                executed.append((call, result, sources))
+                if await req.is_disconnected():
+                    return
+            content = "".join(texts)
+            msgs.append({"role": "assistant", "content": content, "reasoning_content": "".join(thinks),
+                         "tool_calls": [{"name": c.name, "arguments": c.arguments} for c, _, _ in executed]})
+            for call, result, sources in executed:
+                msgs.append({"role": "tool", "content": result})
+                yield ("tool_result", {"name": call.name, "tool_call_id": call.id,
+                                       "arguments": json.dumps(call.arguments, ensure_ascii=False),
+                                       "content": result, "sources": sources})
+            if used >= _MAX_TOOL_CALLS:
+                tools = []
+
     @app.post("/v1/chat/completions")
     async def chat_completions(req: Request):
         auth(req)
@@ -271,6 +372,55 @@ def build_app(session: Session, tok, cfg, args):
         msgs = from_openai(body.get("messages") or [])
         tools = tools_from_openai(body.get("tools")) if body.get("tool_choice") != "none" else []
         thinking = want_thinking(body, "openai")
+        if body.get("server_tools"):
+            msgs = with_search_guide(msgs)
+            rid, created, model = "chatcmpl-" + uuid.uuid4().hex[:24], int(time.time()), body.get("model") or served
+
+            def schunk(delta, finish=None):
+                return {"id": rid, "object": "chat.completion.chunk", "created": created, "model": model,
+                        "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+
+            if body.get("stream"):
+                async def sgen():
+                    yield sse(schunk({"role": "assistant", "content": ""}))
+                    async for kind, v in tool_rounds(body, msgs, req):
+                        if kind == "text":
+                            yield sse(schunk({"content": v}))
+                        elif kind == "thinking":
+                            yield sse(schunk({"reasoning_content": v}))
+                        elif kind == "search":
+                            yield sse({"search": v})
+                        elif kind == "tool_result":
+                            yield sse({"tool_result": v})
+                        elif kind == "error":
+                            yield sse({"error": {"message": v, "type": "server_error"}})
+                        elif kind == "done":
+                            yield sse(schunk({}, "stop"))
+                    yield "data: [DONE]\n\n"
+                return StreamingResponse(sgen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+
+            text_out, think_out, err, done = [], [], None, None
+            async for kind, v in tool_rounds(body, msgs, req):
+                if kind == "text":
+                    text_out.append(v)
+                elif kind == "thinking":
+                    think_out.append(v)
+                elif kind == "error":
+                    err = v
+                elif kind == "done":
+                    done = v
+            if err:
+                raise HTTPException(500, err)
+            if done is None:
+                raise HTTPException(499, "client disconnected")
+            msg = {"role": "assistant", "content": "".join(text_out)}
+            if think_out:
+                msg["reasoning_content"] = "".join(think_out)
+            return {"id": rid, "object": "chat.completion", "created": created, "model": model,
+                    "choices": [{"index": 0, "message": msg, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": done["input_tokens"], "completion_tokens": done["output_tokens"],
+                              "total_tokens": done["input_tokens"] + done["output_tokens"]}}
+
         text = render(tok, msgs, tools, think=thinking, reasoning_effort=body.get("reasoning_effort"))
         ids = encode(text)
         stops = body.get("stop") or []
@@ -591,6 +741,7 @@ def main():
     ap.add_argument("--alias", action="append", default=[], help="extra model names to list")
     args = ap.parse_args()
     session, tok, cfg = load_session(args)
+    print(f"web search: {backend_name()}", flush=True)
     print(f"chat page http://{args.host}:{args.port}/", flush=True)
     print(f"conversations {args.chats}", flush=True)
     import uvicorn

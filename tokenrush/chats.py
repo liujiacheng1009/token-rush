@@ -7,7 +7,7 @@ import threading
 import time
 
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-ROLES = {"system", "user", "assistant"}
+ROLES = {"system", "user", "assistant", "tool"}
 
 
 class ChatError(ValueError):
@@ -79,9 +79,44 @@ class ChatStore:
             raise ChatError("messages must be a list")
         out = []
         for m in raw:
-            if not isinstance(m, dict) or m.get("role") not in ROLES or not isinstance(m.get("content"), str):
-                raise ChatError("each message needs role system|user|assistant and a string content")
-            out.append({"role": m["role"], "content": m["content"]})
+            if not isinstance(m, dict) or m.get("role") not in ROLES:
+                raise ChatError("each message needs role system|user|assistant|tool and a string content")
+            content = m.get("content")
+            if content is None and m.get("role") == "assistant":
+                content = ""
+            if not isinstance(content, str):
+                raise ChatError("each message needs role system|user|assistant|tool and a string content")
+            item = {"role": m["role"], "content": content}
+            if m["role"] == "assistant" and m.get("tool_calls") is not None:
+                item["tool_calls"] = self._tool_calls(m["tool_calls"])
+            if m["role"] == "tool":
+                if isinstance(m.get("name"), str):
+                    item["name"] = m["name"]
+                if isinstance(m.get("tool_call_id"), str):
+                    item["tool_call_id"] = m["tool_call_id"]
+            out.append(item)
+        return out
+
+    def _tool_calls(self, raw):
+        if not isinstance(raw, list):
+            raise ChatError("tool_calls must be a list")
+        out = []
+        for c in raw:
+            if not isinstance(c, dict):
+                raise ChatError("tool call must be an object")
+            fn = c.get("function") if isinstance(c.get("function"), dict) else c
+            name = fn.get("name")
+            if not isinstance(name, str) or not name:
+                raise ChatError("tool call needs a name")
+            args = fn.get("arguments", c.get("arguments", {}))
+            if isinstance(args, dict):
+                args = json.dumps(args, ensure_ascii=False)
+            elif not isinstance(args, str):
+                raise ChatError("tool call arguments must be an object or a string")
+            item = {"type": "function", "function": {"name": name, "arguments": args}}
+            if isinstance(c.get("id"), str):
+                item["id"] = c["id"]
+            out.append(item)
         return out
 
     def _title(self, title, messages):

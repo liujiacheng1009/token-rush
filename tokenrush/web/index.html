@@ -79,7 +79,9 @@
   .bubble { max-width: 720px; white-space: pre-wrap; word-break: break-word; }
   .bubble.user { align-self: flex-end; background: var(--user); border-radius: 12px; padding: 10px 14px; }
   .bubble.assistant { align-self: flex-start; }
-  .think { color: var(--muted); font-size: 14px; margin-bottom: 6px; }
+  .think, .status { color: var(--muted); font-size: 14px; margin-bottom: 6px; }
+  .sources { margin-top: 8px; display: flex; flex-direction: column; gap: 2px; }
+  .sources a { color: var(--accent); font-size: 14px; word-break: break-all; }
   .empty { color: var(--muted); margin: auto; }
   .row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; color: var(--muted); font-size: 14px; }
   .row label { display: flex; align-items: center; gap: 6px; }
@@ -137,7 +139,7 @@ let topP = 0.9
 let catalog = []
 let current = null
 let messages = []
-let live = { content: "", reasoning: "" }
+let live = { content: "", reasoning: "", query: "" }
 let busy = false
 let ctrl = null
 let saveOnAbort = false
@@ -163,9 +165,22 @@ function refreshWarn() {
   warn.textContent = tokens > context * 0.8 ? `大约 ${tokens} 个 token，接近 ${context} 的窗口。开一段新对话。` : ""
 }
 
+function urlsSinceUser(i) {
+  const found = []
+  for (let j = i - 1; j >= 0; j--) {
+    if (messages[j].role === "user") break
+    if (messages[j].role !== "tool") continue
+    for (const u of (messages[j].content.match(/https:\/\/[^\s<>)\]]+/g) || [])) {
+      if (!found.includes(u)) found.push(u)
+    }
+  }
+  return found
+}
+
 function renderLog() {
   log.replaceChildren()
-  if (!messages.length && !live.content && !live.reasoning) {
+  const shown = messages.filter(m => m.role === "user" || (m.role === "assistant" && (m.content || m.reasoning)))
+  if (!shown.length && !live.content && !live.reasoning && !live.query) {
     const e = document.createElement("div")
     e.className = "empty"
     e.textContent = "开始一段对话"
@@ -173,15 +188,25 @@ function renderLog() {
     refreshWarn()
     return
   }
-  for (const m of messages) appendBubble(m.role, m.content, m.reasoning)
-  if (busy) appendBubble("assistant", live.content, live.reasoning)
+  messages.forEach((m, i) => {
+    if (m.role === "tool") return
+    if (m.role === "assistant" && !m.content && !m.reasoning) return
+    appendBubble(m.role, m.content, m.reasoning, m.role === "assistant" ? urlsSinceUser(i) : [], "")
+  })
+  if (busy) appendBubble("assistant", live.content, live.reasoning, urlsSinceUser(messages.length), live.query)
   log.scrollTop = log.scrollHeight
   refreshWarn()
 }
 
-function appendBubble(role, content, reasoning) {
+function appendBubble(role, content, reasoning, urls, status) {
   const el = document.createElement("div")
   el.className = "bubble " + (role === "user" ? "user" : "assistant")
+  if (status) {
+    const s = document.createElement("div")
+    s.className = "status"
+    s.textContent = status
+    el.append(s)
+  }
   if (role !== "user" && reasoning) {
     const t = document.createElement("div")
     t.className = "think"
@@ -191,7 +216,28 @@ function appendBubble(role, content, reasoning) {
   const body = document.createElement("div")
   body.textContent = content || ""
   el.append(body)
+  if (urls && urls.length) {
+    const box = document.createElement("div")
+    box.className = "sources"
+    for (const u of urls) {
+      const a = document.createElement("a")
+      a.href = u
+      a.target = "_blank"
+      a.rel = "noopener"
+      a.textContent = u
+      box.append(a)
+    }
+    el.append(box)
+  }
   log.append(el)
+}
+
+function wireMessage(m) {
+  const o = { role: m.role, content: m.content || "" }
+  if (m.tool_calls) o.tool_calls = m.tool_calls
+  if (m.name) o.name = m.name
+  if (m.tool_call_id) o.tool_call_id = m.tool_call_id
+  return o
 }
 
 function renderList() {
@@ -225,7 +271,7 @@ async function open(id) {
   if (!r.ok) return
   current = await r.json()
   messages = current.messages.slice()
-  live = { content: "", reasoning: "" }
+  live = { content: "", reasoning: "", query: "" }
   renderLog()
   renderList()
 }
@@ -233,7 +279,7 @@ async function open(id) {
 function blank() {
   current = null
   messages = []
-  live = { content: "", reasoning: "" }
+  live = { content: "", reasoning: "", query: "" }
   renderLog()
   renderList()
   box.focus()
@@ -264,7 +310,7 @@ async function save() {
   if (!current) {
     current = { id: crypto.randomUUID().replace(/-/g, ""), title: "", created: Math.floor(Date.now() / 1000), messages: [] }
   }
-  current.messages = messages.map(m => ({ role: m.role, content: m.content }))
+  current.messages = messages.map(wireMessage)
   const r = await fetch("/chats/" + current.id, {
     method: "PUT",
     headers: { "content-type": "application/json" },
@@ -293,7 +339,7 @@ document.getElementById("form").addEventListener("submit", async (ev) => {
   if (!text || busy) return
   box.value = ""
   messages.push({ role: "user", content: text })
-  live = { content: "", reasoning: "" }
+  live = { content: "", reasoning: "", query: "" }
   setBusy(true)
   renderLog()
   ctrl = new AbortController()
@@ -308,7 +354,8 @@ document.getElementById("form").addEventListener("submit", async (ev) => {
         temperature: Number(temp.value),
         top_p: topP,
         stream: true,
-        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        server_tools: true,
+        messages: messages.map(wireMessage),
         chat_template_kwargs: { enable_thinking: think.checked }
       })
     })
@@ -329,6 +376,32 @@ document.getElementById("form").addEventListener("submit", async (ev) => {
         if (data === "[DONE]") continue
         const obj = JSON.parse(data)
         if (obj.error) throw new Error(obj.error.message || "生成失败")
+        if (obj.search) {
+          live.query = (obj.search.tool === "web_fetch" ? "正在打开：" : "正在搜索：") + (obj.search.query || "")
+          renderLog()
+          continue
+        }
+        if (obj.tool_result) {
+          messages.push({
+            role: "assistant",
+            content: live.content || "",
+            reasoning: live.reasoning,
+            tool_calls: [{
+              id: obj.tool_result.tool_call_id,
+              type: "function",
+              function: { name: obj.tool_result.name, arguments: obj.tool_result.arguments }
+            }]
+          })
+          messages.push({
+            role: "tool",
+            name: obj.tool_result.name,
+            tool_call_id: obj.tool_result.tool_call_id,
+            content: obj.tool_result.content
+          })
+          live = { content: "", reasoning: "", query: "" }
+          renderLog()
+          continue
+        }
         const delta = obj.choices && obj.choices[0] && obj.choices[0].delta
         if (!delta) continue
         if (delta.reasoning_content) live.reasoning += delta.reasoning_content
@@ -337,18 +410,18 @@ document.getElementById("form").addEventListener("submit", async (ev) => {
       }
     }
     if (live.content || live.reasoning) messages.push({ role: "assistant", content: live.content, reasoning: live.reasoning })
-    live = { content: "", reasoning: "" }
+    live = { content: "", reasoning: "", query: "" }
     await save()
     renderLog()
   } catch (e) {
     if (e.name === "AbortError") {
       if (!saveOnAbort) return
       if (live.content) messages.push({ role: "assistant", content: live.content, reasoning: live.reasoning })
-      live = { content: "", reasoning: "" }
+      live = { content: "", reasoning: "", query: "" }
       try { await save() } catch (_) {}
       renderLog()
     } else {
-      live = { content: "", reasoning: "" }
+      live = { content: "", reasoning: "", query: "" }
       messages.push({ role: "assistant", content: "出错了：" + e.message })
       try { await save() } catch (_) {}
       renderLog()
