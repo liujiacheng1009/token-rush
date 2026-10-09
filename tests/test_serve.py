@@ -186,6 +186,10 @@ def test_chat_page_and_saved_transcripts(tmp_path):
     assert c.get("/chats/abc").status_code == 404
     assert c.delete("/chats/abc").status_code == 404
     assert json.loads(path.read_text())["chats"][0]["id"] == "def"
+    folded = c.put("/chats/fold1", json={"messages": [{"role": "user", "content": "原文还在"}],
+                                         "fold": {"summary": "一段摘要", "before": 1}}).json()
+    assert folded["fold"] == {"summary": "一段摘要", "before": 1}
+    assert folded["messages"][0]["content"] == "原文还在"
 
 
 def test_server_tools_search_then_cite(monkeypatch):
@@ -238,6 +242,136 @@ def test_without_server_tools_does_not_search(monkeypatch):
     r = c.post("/v1/chat/completions", json={"model": "m", "messages": [{"role": "user", "content": "price?"}]}).json()
     assert r["choices"][0]["finish_reason"] == "tool_calls"
     assert r["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "web_search"
+
+
+def _scripted(tok, replies):
+    sess = StubSession(tok, replies[0])
+    sess.replies = list(replies)
+
+    def generate(ids, max_new, mode, temperature, top_p, top_k, seed):
+        sess.reply = sess.replies.pop(0)
+        yield from StubSession.generate(sess, ids, max_new, mode, temperature, top_p, top_k, seed)
+
+    sess.generate = generate
+    return sess
+
+
+_RECALL = ("<tool_call>\n<function=recall>\n<parameter=query>\n学习率\n</parameter>\n"
+           "</function>\n</tool_call>")
+
+
+def test_recall_uses_this_chat_when_the_old_one_differs(tmp_path):
+    from fastapi.testclient import TestClient
+    from tokenrush.serve import build_app
+    tok = _tok()
+    path = tmp_path / "chats.json"
+    args = types.SimpleNamespace(api_key=None, think="auto", temperature=0.7, top_p=0.9, max_new=512, draft="auto",
+                                 served_name="token-rush", alias=[], chats=str(path))
+    sess = _scripted(tok, [_RECALL, "用 3e-4。旧记录是 1e-4。"])
+    c = TestClient(build_app(sess, tok, types.SimpleNamespace(eos_ids=(tok.eos_token_id,)), args))
+    c.put("/chats/old", json={"title": "旧的学习率笔记", "created": 1760000000,
+                              "messages": [{"role": "user", "content": "把学习率定成 1e-4。"}]})
+    r = c.post("/v1/chat/completions", json={
+        "model": "m", "server_tools": True, "chat_id": "new",
+        "messages": [
+            {"role": "user", "content": "学习率用 3e-4"},
+            {"role": "assistant", "content": "好"},
+            {"role": "user", "content": "上次说的学习率是多少"},
+        ],
+    }).json()
+    first = tok.decode(sess.prompts[0][0])
+    assert "1e-4" not in first and "旧的学习率笔记" not in first
+    second = tok.decode(sess.prompts[1][0])
+    assert "1e-4" in second and "3e-4" in second and "以本段为准" in second
+    assert r["choices"][0]["message"]["content"] == "用 3e-4。旧记录是 1e-4。"
+
+
+def test_recall_does_not_open_the_file_unless_the_user_asked(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from tokenrush.serve import build_app
+    tok = _tok()
+
+    def boom(*args, **kwargs):
+        raise AssertionError("chat file was searched")
+
+    monkeypatch.setattr("tokenrush.recall.search_other", boom)
+    args = types.SimpleNamespace(api_key=None, think="auto", temperature=0.7, top_p=0.9, max_new=512, draft="auto",
+                                 served_name="token-rush", alias=[], chats=str(tmp_path / "chats.json"))
+    sess = _scripted(tok, [_RECALL, "继续写。"])
+    c = TestClient(build_app(sess, tok, types.SimpleNamespace(eos_ids=(tok.eos_token_id,)), args))
+    r = c.post("/v1/chat/completions", json={"model": "m", "server_tools": True,
+                                            "messages": [{"role": "user", "content": "继续写代码"}]}).json()
+    assert r["choices"][0]["message"]["content"] == "继续写。"
+    sess2 = StubSession(tok, _RECALL)
+    c2 = TestClient(build_app(sess2, tok, types.SimpleNamespace(eos_ids=(tok.eos_token_id,)), args))
+    bare = c2.post("/v1/chat/completions", json={"model": "m", "messages": [{"role": "user", "content": "继续写代码"}]}).json()
+    assert bare["choices"][0]["finish_reason"] == "tool_calls"
+    assert bare["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "recall"
+
+
+def test_guide_is_unchanged_on_the_next_turn():
+    from fastapi.testclient import TestClient
+    from tokenrush.serve import build_app
+    tok = _tok()
+    args = types.SimpleNamespace(api_key=None, think="auto", temperature=0.7, top_p=0.9, max_new=512, draft="auto",
+                                 served_name="token-rush", alias=[], chats=None)
+    sess = _scripted(tok, ["你好呀", "再看一眼。"])
+    c = TestClient(build_app(sess, tok, types.SimpleNamespace(eos_ids=(tok.eos_token_id,)), args))
+    c.post("/v1/chat/completions", json={"model": "m", "server_tools": True,
+                                        "messages": [{"role": "user", "content": "你好"}]})
+    c.post("/v1/chat/completions", json={"model": "m", "server_tools": True, "messages": [
+        {"role": "user", "content": "你好"},
+        {"role": "assistant", "content": "你好呀"},
+        {"role": "user", "content": "再来一句"},
+    ]})
+    a, b = sess.prompts[0][0], sess.prompts[1][0]
+    n = 0
+    while n < len(a) and n < len(b) and a[n] == b[n]:
+        n += 1
+    shared = tok.decode(a[:n])
+    assert n > 30 and "recall" in shared and "web_search" in shared
+
+
+def test_fold_shortens_the_prompt_and_leaves_the_file(tmp_path):
+    from fastapi.testclient import TestClient
+    from tokenrush.serve import build_app
+    tok = _tok()
+    filler = "填充。" * 300
+    original = "学习率用 3e-4。" + filler
+    sess = StubSession(tok, "好的，按摘要继续。")
+    sess.max_len = 1400
+
+    def generate(ids, max_new, mode, temperature, top_p, top_k, seed):
+        sess.prompts.append((list(ids), max_new, temperature, top_p))
+        text = tok.decode(ids)
+        reply = "摘要：学习率用 3e-4。" if "收成一段摘要" in text else "好的，按摘要继续。"
+        toks = tok.encode(reply, add_special_tokens=False) + [tok.convert_tokens_to_ids("<|im_end|>")]
+        for i in range(0, len(toks), 3):
+            yield toks[i:i + 3]
+
+    sess.generate = generate
+    path = tmp_path / "chats.json"
+    args = types.SimpleNamespace(api_key=None, think="auto", temperature=0.7, top_p=0.9, max_new=512, draft="auto",
+                                 served_name="token-rush", alias=[], chats=str(path))
+    c = TestClient(build_app(sess, tok, types.SimpleNamespace(eos_ids=(tok.eos_token_id,)), args))
+    messages = [
+        {"role": "user", "content": original},
+        {"role": "assistant", "content": "记下了"},
+        {"role": "user", "content": "请继续"},
+    ]
+    c.put("/chats/long", json={"messages": messages})
+    r = c.post("/v1/chat/completions", json={"model": "m", "server_tools": True, "chat_id": "long",
+                                            "messages": messages}).json()
+    assert r["fold"]["before"] == 1 and "3e-4" in r["fold"]["summary"]
+    answer = tok.decode(sess.prompts[-1][0])
+    assert "已收成摘要" in answer and "请继续" in answer
+    assert len(sess.prompts[-1][0]) < len(sess.prompts[0][0])
+    assert c.get("/chats/long").json()["messages"][0]["content"] == original
+    sess.prompts.clear()
+    again = messages + [{"role": "assistant", "content": "好的，按摘要继续。"}, {"role": "user", "content": "还有呢"}]
+    c.post("/v1/chat/completions", json={"model": "m", "server_tools": True, "chat_id": "long",
+                                        "messages": again, "fold": r["fold"]})
+    assert sess.prompts and "收成一段摘要" not in tok.decode(sess.prompts[0][0])
 
 
 def test_api_key_required_when_set():

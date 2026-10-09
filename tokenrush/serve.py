@@ -27,6 +27,7 @@ import torch
 from .chat import (OutputParser, StopFilter, from_anthropic, from_openai, render, tools_from_anthropic,
                    tools_from_openai)
 from .chats import ChatError, ChatStore, default_chats_path
+from .recall import asks_about_past, recall, shorten_tool
 from .search import backend_name, web_fetch, web_search
 from .session import Session
 
@@ -35,6 +36,7 @@ _MAX_FETCHES = 2
 _SEARCH_GUIDE = (
     "需要时效、或你没有把握的事实时，调用 web_search。需要某条结果的正文时，调用 web_fetch，参数是搜索结果里的 https URL。"
     "只引用工具结果里出现过的 URL。搜索没有结果、超时或抓取失败时，直接说没查到，不要编造数字或链接。"
+    "只在用户询问以前某段对话的内容时调用 recall。摘录与本段已经说过的话冲突时，按本段回答，并写出旧记录里的不同说法，不要用旧记录改正本段。"
 )
 _SERVER_TOOLS = [
     {"type": "function", "function": {
@@ -45,7 +47,13 @@ _SERVER_TOOLS = [
         "name": "web_fetch",
         "description": "Fetch the readable text of one https page returned by web_search.",
         "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}}},
+    {"type": "function", "function": {
+        "name": "recall",
+        "description": "Look up another saved chat. Use only when the user asks what was said in an earlier chat. If the excerpt conflicts with this chat, follow this chat and mention the difference.",
+        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
 ]
+_FOLD_NOTE = "更早的内容已收成摘要（模型看不到被收起的原文）：\n"
+_SUMMARY_SYSTEM = "把更早的对话收成一段摘要，保留用户定下的数字和决定。只输出摘要，不要调用工具。"
 
 # ------------------------------------------------------------ the worker
 
@@ -291,16 +299,79 @@ def build_app(session: Session, tok, cfg, args):
             msgs.insert(0, {"role": "system", "content": _SEARCH_GUIDE})
         return msgs
 
+    def _split_guide(msgs):
+        if msgs and msgs[0].get("role") == "system":
+            return msgs[0], list(msgs[1:])
+        return None, list(msgs)
+
+    def _apply_fold(system, rest, summary, before):
+        head = [system] if system else []
+        note = {"role": "user", "content": _FOLD_NOTE + summary}
+        return head + [note] + [shorten_tool(dict(m)) for m in rest[before:]]
+
+    def _prompt_len(messages, body, thinking):
+        text = render(tok, messages, list(_SERVER_TOOLS), think=thinking, reasoning_effort=body.get("reasoning_effort"))
+        return len(encode(text))
+
+    async def _summarize(older, body, req: Request) -> str:
+        plain = "\n".join(f"{shorten_tool(m).get('role')}: {shorten_tool(m).get('content') or ''}" for m in older)
+        ids, text = [], ""
+        for _ in range(6):
+            text = render(tok, [{"role": "system", "content": _SUMMARY_SYSTEM}, {"role": "user", "content": plain}], think=False)
+            ids = encode(text)
+            if len(ids) + 16 < max_len or len(plain) < 200:
+                break
+            plain = plain[:len(plain) // 2]
+        try:
+            job = make_job(ids, body, 256, [], {}, False, text)
+        except HTTPException:
+            return "（更早的对话已省略）"
+        parts = []
+        async for kind, v in events(job, req):
+            if kind == "text":
+                parts.append(v)
+            elif kind == "error":
+                return "（更早的对话已省略）"
+        summary = "".join(parts).strip()
+        return summary or "（更早的对话已省略）"
+
+    async def prepare_context(msgs, body, thinking, req: Request):
+        """Drop older turns from the prompt once the chat passes half the window.
+
+        The chat file keeps every sentence. A fold already in the request is reused
+        so the prefix stays put; it is rewritten only when that shorter prompt
+        itself passes the halfway mark."""
+        system, rest = _split_guide(msgs)
+        raw = body.get("fold") if isinstance(body.get("fold"), dict) else None
+        reusable = (isinstance(raw, dict) and isinstance(raw.get("summary"), str) and isinstance(raw.get("before"), int)
+                    and not isinstance(raw.get("before"), bool) and 0 < raw["before"] < len(rest))
+        if reusable:
+            folded = _apply_fold(system, rest, raw["summary"], raw["before"])
+            if _prompt_len(folded, body, thinking) <= max_len // 2:
+                return folded, None, rest
+        elif _prompt_len(msgs, body, thinking) <= max_len // 2:
+            return msgs, None, rest
+        keep = 4 if len(rest) > 4 else (2 if len(rest) > 2 else len(rest))
+        if keep >= len(rest):
+            return msgs, None, rest
+        before = len(rest) - keep
+        summary = await _summarize(rest[:before], body, req)
+        return _apply_fold(system, rest, summary, before), {"summary": summary, "before": before}, rest
+
     async def tool_rounds(body, msgs, req: Request):
-        """Yields the same worker events, plus ("search", info) and ("tool_result", info).
-        At most three tool executions, then one answer with the tools removed."""
+        """Yields the same worker events, plus ("search", info), ("tool_result", info)
+        and ("fold", info). At most three tool executions, then one answer with the tools removed."""
+        thinking = want_thinking(body, "openai")
+        chat_id = body.get("chat_id") if isinstance(body.get("chat_id"), str) else ""
+        msgs, fold, client_msgs = await prepare_context(msgs, body, thinking, req)
+        if fold:
+            yield ("fold", fold)
         tools = list(_SERVER_TOOLS)
         fetches = 0
         used = 0
         stops = body.get("stop") or []
         stops = [stops] if isinstance(stops, str) else list(stops)
         max_new = body.get("max_completion_tokens") or body.get("max_tokens") or args.max_new
-        thinking = want_thinking(body, "openai")
         while True:
             if await req.is_disconnected():
                 return
@@ -336,17 +407,23 @@ def build_app(session: Session, tok, cfg, args):
             for call in calls:
                 if used >= _MAX_TOOL_CALLS:
                     break
-                if call.name not in ("web_search", "web_fetch"):
+                if call.name not in ("web_search", "web_fetch", "recall"):
                     yield ("text", f"不会执行这个工具：{call.name}")
                     yield ("done", done)
                     return
                 query = str((call.arguments or {}).get("query") or (call.arguments or {}).get("url") or "")
-                yield ("search", {"tool": call.name, "query": query})
-                if call.name == "web_fetch" and fetches >= _MAX_FETCHES:
+                if call.name == "recall":
+                    if asks_about_past(client_msgs):
+                        yield ("search", {"tool": "recall", "query": query})
+                    result, sources = recall(store, query, chat_id, client_msgs), []
+                elif call.name == "web_fetch" and fetches >= _MAX_FETCHES:
+                    yield ("search", {"tool": call.name, "query": query})
                     result, sources = "本轮最多打开 2 个页面。", []
                 elif call.name == "web_search":
+                    yield ("search", {"tool": call.name, "query": query})
                     result, sources = await asyncio.to_thread(web_search, query)
                 else:
+                    yield ("search", {"tool": call.name, "query": query})
                     result, sources = await asyncio.to_thread(web_fetch, query)
                     if not result.startswith("拒绝"):
                         fetches += 1
@@ -392,6 +469,8 @@ def build_app(session: Session, tok, cfg, args):
                             yield sse({"search": v})
                         elif kind == "tool_result":
                             yield sse({"tool_result": v})
+                        elif kind == "fold":
+                            yield sse({"fold": v})
                         elif kind == "error":
                             yield sse({"error": {"message": v, "type": "server_error"}})
                         elif kind == "done":
@@ -399,7 +478,7 @@ def build_app(session: Session, tok, cfg, args):
                     yield "data: [DONE]\n\n"
                 return StreamingResponse(sgen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
-            text_out, think_out, err, done = [], [], None, None
+            text_out, think_out, err, done, fold_out = [], [], None, None, None
             async for kind, v in tool_rounds(body, msgs, req):
                 if kind == "text":
                     text_out.append(v)
@@ -409,6 +488,8 @@ def build_app(session: Session, tok, cfg, args):
                     err = v
                 elif kind == "done":
                     done = v
+                elif kind == "fold":
+                    fold_out = v
             if err:
                 raise HTTPException(500, err)
             if done is None:
@@ -416,10 +497,13 @@ def build_app(session: Session, tok, cfg, args):
             msg = {"role": "assistant", "content": "".join(text_out)}
             if think_out:
                 msg["reasoning_content"] = "".join(think_out)
-            return {"id": rid, "object": "chat.completion", "created": created, "model": model,
-                    "choices": [{"index": 0, "message": msg, "finish_reason": "stop"}],
-                    "usage": {"prompt_tokens": done["input_tokens"], "completion_tokens": done["output_tokens"],
-                              "total_tokens": done["input_tokens"] + done["output_tokens"]}}
+            out = {"id": rid, "object": "chat.completion", "created": created, "model": model,
+                   "choices": [{"index": 0, "message": msg, "finish_reason": "stop"}],
+                   "usage": {"prompt_tokens": done["input_tokens"], "completion_tokens": done["output_tokens"],
+                             "total_tokens": done["input_tokens"] + done["output_tokens"]}}
+            if fold_out:
+                out["fold"] = fold_out
+            return out
 
         text = render(tok, msgs, tools, think=thinking, reasoning_effort=body.get("reasoning_effort"))
         ids = encode(text)

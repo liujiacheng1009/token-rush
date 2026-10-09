@@ -49,6 +49,8 @@ class ChatStore:
         created = body.get("created")
         created = int(created) if isinstance(created, (int, float)) else int(time.time())
         chat = {"id": chat_id, "title": self._title(body.get("title"), messages), "created": created, "messages": messages}
+        if "fold" in body and body.get("fold") is not None:
+            chat["fold"] = self._fold(body.get("fold"))
         with self._lock:
             chats = self._read()
             for i, c in enumerate(chats):
@@ -118,6 +120,17 @@ class ChatStore:
                 item["id"] = c["id"]
             out.append(item)
         return out
+
+    def _fold(self, raw):
+        if not isinstance(raw, dict):
+            raise ChatError("fold must be an object")
+        summary = raw.get("summary")
+        before = raw.get("before")
+        if not isinstance(summary, str) or not summary.strip():
+            raise ChatError("fold needs a summary")
+        if type(before) is not int or before < 1:
+            raise ChatError("fold needs a before index")
+        return {"summary": summary.strip()[:4000], "before": before}
 
     def _title(self, title, messages):
         if isinstance(title, str) and title.strip():
