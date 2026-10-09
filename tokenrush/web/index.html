@@ -753,6 +753,13 @@ setInterval(async () => {
   showGate(j.holder || "", true)
 }, 2000)
 
+function newId() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID().replace(/-/g, "")
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  return Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("")
+}
+
 function setBusy(on) {
   busy = on
   sendBtn.disabled = on
@@ -768,7 +775,7 @@ function halt(save) {
 
 async function save() {
   if (!current) {
-    current = { id: crypto.randomUUID().replace(/-/g, ""), title: "", created: Math.floor(Date.now() / 1000), messages: [] }
+    current = { id: newId(), title: "", created: Math.floor(Date.now() / 1000), messages: [] }
   }
   current.messages = messages.map(wireMessage)
   const r = await fetch("/chats/" + current.id, {
@@ -853,7 +860,7 @@ document.getElementById("form").addEventListener("submit", async (ev) => {
         }
         if (obj.fold) {
           if (!current) {
-            current = { id: crypto.randomUUID().replace(/-/g, ""), title: "", created: Math.floor(Date.now() / 1000), messages: [] }
+            current = { id: newId(), title: "", created: Math.floor(Date.now() / 1000), messages: [] }
           }
           current.fold = obj.fold
           renderLog()
