@@ -15,6 +15,7 @@ dependencies = [
     "flash-linear-attention",    # the GDN chunk kernel for prefill
     "fastapi",
     "uvicorn",
+    "websockets",
 ]
 
 [project.optional-dependencies]

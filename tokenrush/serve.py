@@ -15,6 +15,7 @@ OpenAI clients: base_url http://host:8000/v1, any model name.
 """
 import argparse
 import asyncio
+import base64
 import json
 import os
 import queue
@@ -189,7 +190,7 @@ class Worker:
 
 
 def build_app(session: Session, tok, cfg, args):
-    from fastapi import FastAPI, HTTPException, Request, Response
+    from fastapi import FastAPI, HTTPException, Request, Response, WebSocket
     from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
     app = FastAPI(title="token-rush")
@@ -987,6 +988,100 @@ def build_app(session: Session, tok, cfg, args):
                 "stop_reason": stop_of(done), "stop_sequence": done["stop_sequence"], "usage": usage_of(done)}
 
     app.state.t0 = time.time()
+
+    # The code page is OpenCode, on this same port. Its own server stays on
+    # 127.0.0.1:4096; the browser only talks to us. /seat is ours, so it does
+    # not collide with OpenCode's /session.
+    oc_skip = {"host", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
+               "trailers", "transfer-encoding", "upgrade", "content-length", "content-encoding", "authorization"}
+
+    def oc_basic():
+        user = os.environ.get("OPENCODE_SERVER_USERNAME") or "opencode"
+        pw = os.environ.get("OPENCODE_SERVER_PASSWORD") or _SEAT_PASSWORD
+        return user, pw, "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()
+
+    @app.api_route("/{full:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+    async def code_proxy(full: str, req: Request):
+        import httpx
+        box = Response()
+        hold_page(req, box)
+        user, pw, _ = oc_basic()
+        url = "http://127.0.0.1:4096/" + full
+        if req.url.query:
+            url += "?" + req.url.query
+        headers = {k: v for k, v in req.headers.items() if k.lower() not in oc_skip}
+        client = httpx.AsyncClient(timeout=None, auth=(user, pw))
+        try:
+            upstream = await client.send(
+                client.build_request(req.method, url, headers=headers, content=await req.body()), stream=True)
+        except httpx.ConnectError:
+            await client.aclose()
+            raise HTTPException(502, "写代码没有启动")
+        passed = {k: v for k, v in upstream.headers.items()
+                  if k.lower() not in {"content-length", "content-encoding", "transfer-encoding", "connection", "set-cookie"}}
+
+        async def chunks():
+            try:
+                async for chunk in upstream.aiter_bytes():
+                    yield chunk
+            finally:
+                await upstream.aclose()
+                await client.aclose()
+
+        out = StreamingResponse(chunks(), status_code=upstream.status_code, headers=passed)
+        for key, value in box.raw_headers:
+            if key.lower() == b"set-cookie":
+                out.raw_headers.append((key, value))
+        return out
+
+    @app.websocket("/{full:path}")
+    async def code_ws(ws: WebSocket, full: str):
+        from websockets.asyncio.client import connect as ws_connect
+        if seat_view(ws)[0] != "in":
+            await ws.close(code=1008)
+            return
+        await ws.accept()
+        _, _, basic = oc_basic()
+        url = "ws://127.0.0.1:4096/" + full
+        if ws.url.query:
+            url += "?" + ws.url.query
+        try:
+            remote_cm = ws_connect(url, additional_headers={"Authorization": basic}, max_size=None, proxy=None)
+            remote = await remote_cm.__aenter__()
+        except Exception:
+            await ws.close(code=1011)
+            return
+
+        async def from_browser():
+            try:
+                while True:
+                    msg = await ws.receive()
+                    if msg["type"] == "websocket.disconnect":
+                        return
+                    if msg.get("bytes") is not None:
+                        await remote.send(msg["bytes"])
+                    elif msg.get("text") is not None:
+                        await remote.send(msg["text"])
+            finally:
+                await remote.close()
+
+        async def from_code():
+            try:
+                async for message in remote:
+                    if isinstance(message, str):
+                        await ws.send_text(message)
+                    else:
+                        await ws.send_bytes(message)
+            finally:
+                try:
+                    await ws.close()
+                except RuntimeError:
+                    pass
+
+        try:
+            await asyncio.gather(from_browser(), from_code())
+        finally:
+            await remote_cm.__aexit__(None, None, None)
 
     return app
 
