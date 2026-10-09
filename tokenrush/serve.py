@@ -30,6 +30,7 @@ from .chat import (OutputParser, StopFilter, from_anthropic, from_openai, render
                    tools_from_openai)
 from .chats import ChatError, ChatStore, default_chats_path
 from .recall import asks_about_past, recall, shorten_tool
+from .fsview import FsError, inside, list_dir, read_text, write_text
 from .search import backend_name, web_fetch, web_search
 
 _SEAT_PASSWORD = "bestcalib"
@@ -70,6 +71,21 @@ _SERVER_TOOLS = [
         "name": "recall",
         "description": "Look up another saved chat. Use only when the user asks what was said in an earlier chat. If the excerpt conflicts with this chat, follow this chat and mention the difference.",
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+]
+_CODE_TOOLS = [
+    {"type": "function", "function": {
+        "name": "list_dir",
+        "description": "List one directory inside the opened project. path is absolute.",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+    {"type": "function", "function": {
+        "name": "read_file",
+        "description": "Read a text file inside the opened project. path is absolute.",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+    {"type": "function", "function": {
+        "name": "write_file",
+        "description": "Write a text file inside the opened project, replacing its contents. path is absolute.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
 ]
 _FOLD_NOTE = "更早的内容已收成摘要（模型看不到被收起的原文）：\n"
 _SUMMARY_SYSTEM = "把更早的对话收成一段摘要，保留用户定下的数字和决定。只输出摘要，不要调用工具。"
@@ -359,6 +375,33 @@ def build_app(session: Session, tok, cfg, args):
             raise HTTPException(404, "no such chat")
         return {"ok": True}
 
+    def fs_call(fn, *a):
+        try:
+            return fn(*a)
+        except FsError as e:
+            raise HTTPException(400, str(e))
+
+    @app.get("/fs/list")
+    def fs_list(req: Request, response: Response, path: str = ""):
+        auth(req)
+        hold_page(req, response)
+        return fs_call(list_dir, path)
+
+    @app.get("/fs/file")
+    def fs_read(req: Request, response: Response, path: str):
+        auth(req)
+        hold_page(req, response)
+        return {"path": path, "content": fs_call(read_text, path)}
+
+    @app.put("/fs/file")
+    async def fs_write(req: Request, response: Response):
+        auth(req)
+        hold_page(req, response)
+        body = await req.json()
+        root = str(body.get("root") or "")
+        path = fs_call(write_text, str(body.get("path") or ""), body.get("content"), root)
+        return {"ok": True, "path": path}
+
     @app.get("/health")
     async def health():
         return {"status": "ok", "busy": worker.busy, "queued": worker.jobs.qsize(), "context": max_len,
@@ -537,6 +580,90 @@ def build_app(session: Session, tok, cfg, args):
             if used >= _MAX_TOOL_CALLS:
                 tools = []
 
+    async def code_rounds(body, msgs, req: Request, root: str):
+        """File tools for the code page. The opened directory is the only place they can write."""
+        thinking = want_thinking(body, "openai")
+        page_token = getattr(req.state, "seat_token", None)
+        tools = list(_CODE_TOOLS)
+        used = 0
+        stops = body.get("stop") or []
+        stops = [stops] if isinstance(stops, str) else list(stops)
+        max_new = body.get("max_completion_tokens") or body.get("max_tokens") or args.max_new
+        guide = ("你在编辑服务器目录 " + root + "。用 list_dir、read_file、write_file 查看和修改其中的文件，"
+                 "path 用这个目录下的绝对路径。改完用一两句话说明改了什么。")
+        if msgs and msgs[0].get("role") == "system":
+            msgs = [dict(msgs[0], content=((msgs[0].get("content") or "") + "\n\n" + guide).strip())] + [dict(m) for m in msgs[1:]]
+        else:
+            msgs = [{"role": "system", "content": guide}] + [dict(m) for m in msgs]
+        while True:
+            if page_token is not None:
+                with seat_lock:
+                    if seat["token"] != page_token:
+                        yield ("error", "你已被挤下线")
+                        return
+            if await req.is_disconnected():
+                return
+            text = render(tok, msgs, tools, think=thinking, reasoning_effort=body.get("reasoning_effort"))
+            try:
+                job = make_job(encode(text), body, max_new, stops, schemas_of(tools), thinking, text)
+            except HTTPException as exc:
+                yield ("error", exc.detail)
+                return
+            texts, thinks, calls, done = [], [], [], None
+            async for kind, v in events(job, req):
+                if kind == "text":
+                    texts.append(v)
+                    yield ("text", v)
+                elif kind == "thinking":
+                    thinks.append(v)
+                elif kind == "tool_call":
+                    calls.append(v)
+                elif kind == "error":
+                    yield ("error", v)
+                    return
+                elif kind == "done":
+                    done = v
+            if done is None:
+                return
+            if not calls or not tools:
+                yield ("done", done)
+                return
+            executed = []
+            for call in calls:
+                if used >= _MAX_TOOL_CALLS:
+                    break
+                if call.name not in ("list_dir", "read_file", "write_file"):
+                    result = f"不会执行这个工具：{call.name}"
+                else:
+                    args_ = call.arguments or {}
+                    path = str(args_.get("path") or "")
+                    try:
+                        if call.name == "list_dir":
+                            listed = list_dir(path)
+                            if not (listed["path"] == root or listed["path"].startswith(root + os.sep)):
+                                raise FsError("只能看当前打开的目录")
+                            lines = [listed["path"]] + [("/" if e["dir"] else " ") + e["name"] for e in listed["entries"]]
+                            result = "\n".join(lines)
+                        elif call.name == "read_file":
+                            result = read_text(inside(path, root), limit=12_000)
+                        else:
+                            written = write_text(path, str(args_.get("content") or ""), root)
+                            result = "已写入 " + written
+                    except FsError as exc:
+                        result = str(exc)
+                used += 1
+                executed.append((call, result))
+                if await req.is_disconnected():
+                    return
+            msgs.append({"role": "assistant", "content": "".join(texts), "reasoning_content": "".join(thinks),
+                         "tool_calls": [{"name": c.name, "arguments": c.arguments} for c, _ in executed]})
+            for call, result in executed:
+                msgs.append({"role": "tool", "content": result})
+                yield ("tool_result", {"name": call.name, "path": str((call.arguments or {}).get("path") or ""),
+                                       "content": result})
+            if used >= _MAX_TOOL_CALLS:
+                tools = []
+
     @app.post("/v1/chat/completions")
     async def chat_completions(req: Request, response: Response):
         auth(req)
@@ -544,6 +671,32 @@ def build_app(session: Session, tok, cfg, args):
         msgs = from_openai(body.get("messages") or [])
         tools = tools_from_openai(body.get("tools")) if body.get("tool_choice") != "none" else []
         thinking = want_thinking(body, "openai")
+        if body.get("code_tools"):
+            req.state.seat_token = hold_page(req, response)
+            try:
+                root = inside(str(body.get("workspace") or ""), str(body.get("workspace") or ""))
+            except FsError as exc:
+                raise HTTPException(400, str(exc))
+            rid, created, model = "chatcmpl-" + uuid.uuid4().hex[:24], int(time.time()), body.get("model") or served
+
+            def cchunk(delta, finish=None):
+                return {"id": rid, "object": "chat.completion.chunk", "created": created, "model": model,
+                        "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+
+            async def cgen():
+                yield sse(cchunk({"role": "assistant", "content": ""}))
+                async for kind, v in code_rounds(body, msgs, req, root):
+                    if kind == "text":
+                        yield sse(cchunk({"content": v}))
+                    elif kind == "tool_result":
+                        yield sse({"tool_result": v})
+                    elif kind == "error":
+                        yield sse({"error": {"message": v if isinstance(v, str) else str(v), "type": "server_error"}})
+                    elif kind == "done":
+                        yield sse(cchunk({}, "stop"))
+                yield "data: [DONE]\n\n"
+            return StreamingResponse(cgen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+
         if body.get("server_tools"):
             req.state.seat_token = hold_page(req, response)
             msgs = with_search_guide(msgs)
@@ -834,6 +987,7 @@ def build_app(session: Session, tok, cfg, args):
                 "stop_reason": stop_of(done), "stop_sequence": done["stop_sequence"], "usage": usage_of(done)}
 
     app.state.t0 = time.time()
+
     return app
 
 
