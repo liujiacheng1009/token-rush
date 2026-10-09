@@ -993,6 +993,58 @@ def build_app(session: Session, tok, cfg, args):
     # another program on this machine, so the default is 8088. The browser
     # only talks to us, under /vscode/. This route is registered before the
     # OpenCode catch-all so /vscode is not forwarded to port 4096.
+    # The editor's chat lives on this page, beside the VS Code frame. The
+    # code-server extension (loopback only) posts a selection; the seated
+    # browser picks it up. A second browser cannot read the snippet.
+    ide_lock = threading.Lock()
+    ide_cites = []
+    ide_pull = {"on": False}
+
+    def from_loopback(req: Request) -> bool:
+        host = req.client.host if req.client else ""
+        if host.startswith("::ffff:"):
+            host = host.removeprefix("::ffff:")
+        return host in ("127.0.0.1", "::1", "localhost") or host.startswith("127.")
+
+    @app.post("/ide/cite")
+    async def ide_cite(req: Request):
+        if not from_loopback(req):
+            raise HTTPException(403, "loopback only")
+        body = await req.json()
+        label = str(body.get("label") or "")[:240]
+        text = str(body.get("text") or "")[:12000]
+        if not label or not text:
+            raise HTTPException(400, "label and text")
+        item = {"id": secrets.token_hex(4), "label": label, "text": text}
+        with ide_lock:
+            ide_cites.append(item)
+            del ide_cites[:-20]
+        return {"ok": True}
+
+    @app.get("/ide/cites")
+    def ide_cites_get(req: Request, response: Response):
+        hold_page(req, response)
+        with ide_lock:
+            items = ide_cites[:]
+            ide_cites.clear()
+        return {"cites": items}
+
+    @app.post("/ide/pull")
+    def ide_pull_post(req: Request, response: Response):
+        hold_page(req, response)
+        with ide_lock:
+            ide_pull["on"] = True
+        return {"ok": True}
+
+    @app.get("/ide/pull")
+    def ide_pull_get(req: Request):
+        if not from_loopback(req):
+            raise HTTPException(403, "loopback only")
+        with ide_lock:
+            on = ide_pull["on"]
+            ide_pull["on"] = False
+        return {"pull": on}
+
     vscode_upstream = os.environ.get("TOKENRUSH_VSCODE_UPSTREAM", "http://127.0.0.1:8088").rstrip("/")
 
     def vscode_location(value: str) -> str:

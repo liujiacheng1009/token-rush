@@ -163,7 +163,7 @@ def test_chat_page_and_saved_transcripts(tmp_path):
                                  served_name="token-rush", alias=[], chats=str(path))
     c = TestClient(build_app(Unused(), None, None, args))
     page = c.get("/")
-    assert page.status_code == 200 and "新对话" in page.text and "写代码" in page.text and 'id="ide"' in page.text and 'id="monaco"' in page.text and 'id="vscode-frame"' in page.text and "打开目录" in page.text
+    assert page.status_code == 200 and "新对话" in page.text and "写代码" in page.text and 'id="ide"' in page.text and 'id="monaco"' in page.text and 'id="vscode-frame"' in page.text and 'id="code-chat"' in page.text and "打开目录" in page.text
     assert c.get("/chats").json() == []
     saved = c.put("/chats/abc", json={"title": "草稿", "messages": [{"role": "user", "content": "你好"}]}).json()
     assert saved["title"] == "草稿" and saved["messages"] == [{"role": "user", "content": "你好"}]
@@ -209,6 +209,26 @@ def test_vscode_path_is_not_the_opencode_proxy(tmp_path):
             if path == "/vscode/" and got.status_code == 200:
                 assert "workbench" in got.text
 
+
+def test_ide_cite_stays_on_loopback_and_the_seat(tmp_path):
+    from fastapi.testclient import TestClient
+    from tokenrush.serve import build_app
+
+    args = types.SimpleNamespace(api_key=None, think="auto", temperature=0.7, top_p=0.9, max_new=512, draft="auto",
+                                 served_name="token-rush", alias=[], chats=str(tmp_path / "chats.json"))
+    app = build_app(types.SimpleNamespace(max_len=32768), None, None, args)
+    local = TestClient(app, client=("127.0.0.1", 9))
+    page = TestClient(app, client=("10.1.1.1", 9))
+    other = TestClient(app, client=("10.2.2.2", 9))
+    assert other.post("/ide/cite", json={"label": "a.py:1", "text": "x"}).status_code == 403
+    assert local.post("/ide/cite", json={"label": "a.py:1-2", "text": "print(1)"}).json()["ok"] is True
+    got = page.get("/ide/cites").json()["cites"]
+    assert got[0]["label"] == "a.py:1-2" and got[0]["text"] == "print(1)"
+    assert page.get("/ide/cites").json()["cites"] == []
+    assert page.post("/ide/pull").json()["ok"] is True
+    assert local.get("/ide/pull").json()["pull"] is True
+    assert local.get("/ide/pull").json()["pull"] is False
+    assert other.get("/ide/cites").status_code == 401
 
 
 def test_server_tools_search_then_cite(monkeypatch):

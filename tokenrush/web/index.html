@@ -61,25 +61,90 @@
   }
   header.bar {
     flex: none;
-    display: flex;
-    justify-content: center;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
-    gap: 4px;
-    height: 52px;
+    height: 40px;
     font-family: "Noto Sans CJK SC", "Noto Sans SC", "PingFang SC", sans-serif;
-    font-size: 14px;
+    font-size: 13px;
   }
+  header.bar .modes { display: flex; gap: 4px; }
   header.bar button {
     border: 0;
     background: transparent;
     color: var(--muted);
     border-radius: 999px;
-    padding: 5px 14px;
+    padding: 4px 12px;
   }
   header.bar button.on { color: var(--text); background: var(--user); }
   header.bar button:hover { color: var(--text); border: 0; }
-  #log[hidden], .composer[hidden], #ide[hidden], aside[hidden], #editor[hidden], #monaco[hidden], #pane-files[hidden], #pane-search[hidden], #vscode-frame[hidden] { display: none !important; }
-  #vscode-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: #1e1e1e; }
+  #mode-fold { justify-self: end; margin-right: 8px; width: 28px; height: 28px; padding: 0; }
+  #mode-unfold {
+    position: absolute; top: 6px; left: 50%; transform: translateX(-50%); z-index: 4;
+    height: 22px; padding: 0 10px; border-radius: 999px;
+    background: var(--side); border: 1px solid var(--line); color: var(--muted);
+    font-family: "Noto Sans CJK SC", "Noto Sans SC", sans-serif; font-size: 12px;
+  }
+  #log[hidden], .composer[hidden], #ide[hidden], aside[hidden], #editor[hidden], #monaco[hidden], #pane-files[hidden], #pane-search[hidden], #code-row[hidden], #mode-bar[hidden], #mode-unfold[hidden] { display: none !important; }
+  #code-row { flex: 1; min-height: 0; display: flex; }
+  #vscode-frame { flex: 1; min-width: 0; min-height: 0; border: 0; background: #1e1e1e; }
+  #code-split { width: 6px; flex: none; cursor: col-resize; background: #2b2b2b; }
+  #code-split:hover, body.col-drag #code-split { background: #0e639c; }
+  body.col-drag { cursor: col-resize; user-select: none; }
+  body.col-drag iframe { pointer-events: none; }
+  #code-chat {
+    width: 360px; flex: none; min-width: 260px; min-height: 0; display: flex; flex-direction: column;
+    background: #1e1e1e; color: #d4d4d4;
+    font-family: "Noto Sans CJK SC", "Noto Sans SC", "PingFang SC", sans-serif;
+    font-size: 13px; line-height: 1.45;
+  }
+  #code-chat header { flex: none; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 14px; color: #ccc; font-size: 13px; }
+  #code-status { color: #d6a15c; font-size: 12px; }
+  #code-status:empty { display: none; }
+  #code-status::before {
+    content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px;
+    border-radius: 50%; background: #d6a15c; vertical-align: middle;
+    animation: code-pulse 1s ease-in-out infinite;
+  }
+  @keyframes code-pulse { 50% { opacity: 0.25; } }
+  #code-log { flex: 1; overflow: auto; padding: 4px 14px 12px; }
+  #code-log .empty { color: #8a8a8a; }
+  #code-log .turn { margin: 0 0 16px; }
+  #code-log .who { font-size: 11px; color: #8a8a8a; margin-bottom: 4px; }
+  #code-log .text { white-space: pre-wrap; word-break: break-word; }
+  #code-log .turn.user { display: flex; flex-direction: column; align-items: flex-end; }
+  #code-log .turn.user .bubble {
+    max-width: 100%; background: #34362f; border-radius: 12px 12px 4px 12px; padding: 8px 10px; color: #f2f0e8;
+  }
+  #code-log .turn.assistant .text { color: #c8c8c8; }
+  #code-log .turn.assistant.live .text:empty::before { content: "正在回复"; color: #8a8a8a; }
+  #code-log .turn.assistant.live .text::after {
+    content: ""; display: inline-block; width: 7px; height: 13px; margin-left: 3px;
+    background: #d6a15c; vertical-align: text-bottom; animation: code-blink 1s steps(1) infinite;
+  }
+  @keyframes code-blink { 50% { opacity: 0; } }
+  #code-log .pills { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+  #code-send.busy { background: #3c3c3c; color: #d6a15c; }
+  #code-chat form {
+    position: relative; margin: 8px; padding: 8px 8px 36px;
+    border: 1px solid #3c3c3c; border-radius: 12px; background: #252526;
+  }
+  #code-chat form:focus-within { border-color: #555; }
+  #code-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  #code-chips:empty { display: none; }
+  #code-chips:not(:empty) { margin-bottom: 6px; }
+  #code-chat .chip, #code-log .pill {
+    border: 1px solid #3c3c3c; background: #2a2a2a; border-radius: 999px;
+    padding: 1px 8px; font-family: ui-monospace, monospace; font-size: 12px; color: #ddd;
+  }
+  #code-chat .chip button { border: 0; background: transparent; color: #aaa; padding: 0 0 0 4px; border-radius: 999px; }
+  #code-box { width: 100%; height: 52px; resize: none; background: transparent; color: #eee; border: 0; padding: 2px 4px; font: inherit; }
+  #code-box:focus { outline: none; }
+  #code-send {
+    position: absolute; right: 8px; bottom: 8px; width: 26px; height: 26px; padding: 0;
+    border: 0; border-radius: 999px; background: #e7e4da; color: #1a140c;
+  }
+  #code-send:disabled { opacity: 0.4; }
   #ide {
     flex: 1; min-height: 0; display: flex; flex-direction: column;
     background: #1e1e1e; color: #cccccc;
@@ -155,7 +220,7 @@
   .chat.on { background: var(--user); }
   .chat span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chat .x { border: 0; padding: 0 4px; color: var(--muted); }
-  main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+  main { position: relative; flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
   #log {
     flex: 1;
     min-height: 0;
@@ -311,11 +376,28 @@
   </form>
 </div>
 <main>
-  <header class="bar">
-    <button id="mode-chat" class="on" type="button">对话</button>
-    <button id="mode-code" type="button">写代码</button>
+  <header class="bar" id="mode-bar">
+    <span></span>
+    <div class="modes">
+      <button id="mode-chat" class="on" type="button">对话</button>
+      <button id="mode-code" type="button">写代码</button>
+    </div>
+    <button id="mode-fold" type="button" title="收起"><i class="codicon codicon-chevron-up"></i></button>
   </header>
-  <iframe id="vscode-frame" hidden title="VS Code"></iframe>
+  <button id="mode-unfold" type="button" hidden title="展开">对话 / 写代码</button>
+  <div id="code-row" hidden>
+    <iframe id="vscode-frame" title="VS Code"></iframe>
+    <div id="code-split" title="拖动调整宽度"></div>
+    <section id="code-chat">
+      <header>token-rush<span id="code-status"></span></header>
+      <div id="code-log"><div class="empty">选中代码，右键「把选中代码加入 token-rush」。引用显示成 文件:行号。</div></div>
+      <form id="code-form">
+        <div id="code-chips"></div>
+        <textarea id="code-box" placeholder="问点什么"></textarea>
+        <button id="code-send" type="submit" title="发送"><i class="codicon codicon-arrow-up"></i></button>
+      </form>
+    </section>
+  </div>
   <div id="ide" hidden>
     <div class="ide-bar">
       <button id="open-dir" type="button" title="打开目录"><i class="codicon codicon-folder-opened"></i></button>
@@ -1173,8 +1255,9 @@ function showCode(on) {
   document.getElementById("log").hidden = on
   document.getElementById("form").hidden = on
   ide.hidden = true
+  const row = document.getElementById("code-row")
   const frame = document.getElementById("vscode-frame")
-  frame.hidden = !on
+  row.hidden = !on
   if (on && !frame.getAttribute("src")) {
     frame.src = "/vscode/?folder=" + encodeURIComponent("/home/jesse/workspace/token-rush")
   }
@@ -1183,6 +1266,35 @@ function showCode(on) {
 }
 document.getElementById("mode-chat").addEventListener("click", () => showCode(false))
 document.getElementById("mode-code").addEventListener("click", () => showCode(true))
+function foldModes(on) {
+  document.getElementById("mode-bar").hidden = on
+  document.getElementById("mode-unfold").hidden = !on
+  localStorage.setItem("tokenrush.modeBar", on ? "hidden" : "shown")
+}
+document.getElementById("mode-fold").addEventListener("click", () => foldModes(true))
+document.getElementById("mode-unfold").addEventListener("click", () => foldModes(false))
+if (localStorage.getItem("tokenrush.modeBar") === "hidden") foldModes(true)
+const codeChat = document.getElementById("code-chat")
+const savedWidth = Number(localStorage.getItem("tokenrush.codeChatWidth"))
+if (savedWidth >= 260) codeChat.style.width = savedWidth + "px"
+const codeSplit = document.getElementById("code-split")
+codeSplit.addEventListener("mousedown", (ev) => {
+  ev.preventDefault()
+  document.body.classList.add("col-drag")
+  const move = (e) => {
+    const row = document.getElementById("code-row").getBoundingClientRect()
+    const width = Math.max(260, Math.min(row.right - e.clientX, row.width - 280))
+    codeChat.style.width = width + "px"
+  }
+  const up = () => {
+    document.body.classList.remove("col-drag")
+    window.removeEventListener("mousemove", move)
+    window.removeEventListener("mouseup", up)
+    localStorage.setItem("tokenrush.codeChatWidth", String(Math.round(codeChat.getBoundingClientRect().width)))
+  }
+  window.addEventListener("mousemove", move)
+  window.addEventListener("mouseup", up)
+})
 document.getElementById("act-files").addEventListener("click", () => showPane("files"))
 document.getElementById("act-search").addEventListener("click", () => showPane("search"))
 function showPane(which) {
@@ -1543,6 +1655,142 @@ document.getElementById("vibe-form").addEventListener("submit", async (ev) => {
 vibeBox.addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); document.getElementById("vibe-form").requestSubmit() }
 })
+const codeLog = document.getElementById("code-log")
+const codeChips = document.getElementById("code-chips")
+const codeBox = document.getElementById("code-box")
+const codeCites = []
+const codeMessages = []
+let codeBusy = false
+function drawCode() {
+  codeChips.innerHTML = ""
+  for (const cite of codeCites) {
+    const chip = document.createElement("span")
+    chip.className = "chip"
+    chip.append(document.createTextNode(cite.label))
+    const x = document.createElement("button")
+    x.type = "button"
+    x.textContent = "×"
+    x.addEventListener("click", () => {
+      const i = codeCites.indexOf(cite)
+      if (i >= 0) codeCites.splice(i, 1)
+      drawCode()
+    })
+    chip.append(x)
+    codeChips.append(chip)
+  }
+}
+function codeLine(role, text, cites) {
+  const empty = codeLog.querySelector(".empty")
+  if (empty) empty.remove()
+  const el = document.createElement("div")
+  el.className = "turn " + role
+  const who = document.createElement("div")
+  who.className = "who"
+  who.textContent = role === "user" ? "你" : "token-rush"
+  el.append(who)
+  const bubble = document.createElement("div")
+  if (role === "user") bubble.className = "bubble"
+  if (cites && cites.length) {
+    const pills = document.createElement("div")
+    pills.className = "pills"
+    for (const cite of cites) {
+      const pill = document.createElement("span")
+      pill.className = "pill"
+      pill.textContent = cite.label
+      pills.append(pill)
+    }
+    bubble.append(pills)
+  }
+  const body = document.createElement("div")
+  body.className = "text"
+  body.textContent = text
+  bubble.append(body)
+  el.append(bubble)
+  codeLog.append(el)
+  codeLog.scrollTop = codeLog.scrollHeight
+  return body
+}
+function codePrompt(text, cites) {
+  if (!cites.length) return text
+  const blocks = cites.map(c => c.label + "\n```\n" + c.text + "\n```").join("\n\n")
+  return blocks + (text ? "\n\n" + text : "")
+}
+document.getElementById("code-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault()
+  const text = codeBox.value.trim()
+  if ((!text && !codeCites.length) || codeBusy) return
+  const cites = codeCites.splice(0, codeCites.length)
+  drawCode()
+  codeBox.value = ""
+  codeLine("user", text, cites)
+  codeMessages.push({ role: "user", content: text, cites })
+  const body = codeLine("assistant", "")
+  body.parentElement.parentElement.classList.add("live")
+  codeBusy = true
+  const send = document.getElementById("code-send")
+  const status = document.getElementById("code-status")
+  send.disabled = true
+  send.classList.add("busy")
+  status.textContent = "正在回复"
+  try {
+    const r = await fetch("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "token-rush", stream: true, temperature: 0.7,
+        messages: [
+          { role: "system", content: "你是这台机器上的 token-rush。用户附上的代码用 文件:行号 标出。回答用中文，引用代码时沿用同样的 文件:行号。" },
+          ...codeMessages.slice(-16).map(m => ({ role: m.role, content: m.role === "user" ? codePrompt(m.content, m.cites || []) : m.content }))
+        ]
+      })
+    })
+    if (!r.ok) throw new Error("请求失败")
+    const reader = r.body.getReader()
+    const dec = new TextDecoder()
+    let buf = "", answer = ""
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += dec.decode(value, { stream: true })
+      const parts = buf.split("\n\n")
+      buf = parts.pop()
+      for (const part of parts) {
+        const line = part.split("\n").filter(l => l.startsWith("data:")).pop()
+        if (!line) continue
+        const data = line.slice(5).trim()
+        if (data === "[DONE]") continue
+        const obj = JSON.parse(data)
+        if (obj.error) throw new Error(obj.error.message || "出错了")
+        const delta = obj.choices && obj.choices[0] && obj.choices[0].delta
+        if (delta && delta.content) { answer += delta.content; body.textContent = answer }
+      }
+    }
+    codeMessages.push({ role: "assistant", content: answer })
+  } catch (e) {
+    body.textContent = "没有发出去：" + e.message
+  } finally {
+    body.parentElement.parentElement.classList.remove("live")
+    codeBusy = false
+    send.disabled = false
+    send.classList.remove("busy")
+    status.textContent = ""
+  }
+})
+codeBox.addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); document.getElementById("code-form").requestSubmit() }
+})
+setInterval(async () => {
+  if (document.getElementById("code-row").hidden) return
+  try {
+    const r = await fetch("/ide/cites")
+    if (!r.ok) return
+    const data = await r.json()
+    if (data.cites && data.cites.length) {
+      codeCites.push(...data.cites)
+      drawCode()
+    }
+  } catch (e) {}
+}, 700)
 claimSeat().then(() => { if (seated) return loadCatalog().then(() => { if (catalog.length) return open(catalog[0].id) }) })
 fetch("/health").then(r => r.json()).then(h => {
   if (typeof h.top_p === "number") topP = h.top_p
