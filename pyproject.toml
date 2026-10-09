@@ -31,6 +31,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["tokenrush"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"tokenrush/web/index.html" = "tokenrush/web/index.html"
+
 [tool.uv]
 environments = ["sys_platform == 'linux'"]
 

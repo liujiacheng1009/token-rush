@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token Rush</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #121410;
+    --side: #1b1e18;
+    --line: #2c3128;
+    --text: #e7e4da;
+    --muted: #8d8a7e;
+    --user: #262a22;
+    --accent: #d6a15c;
+    --danger: #c46b55;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.5 "Iowan Old Style", Palatino, "Songti SC", serif;
+  }
+  aside {
+    width: 260px;
+    flex: none;
+    background: var(--side);
+    border-right: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  header.side, .composer {
+    padding: 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .composer { border-bottom: 0; border-top: 1px solid var(--line); }
+  button, textarea, input[type="range"] { font: inherit; color: inherit; }
+  button {
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button.primary { background: var(--accent); color: #1a140c; border-color: var(--accent); }
+  button.danger { color: var(--danger); }
+  #new { width: 100%; }
+  #list { overflow: auto; flex: 1; padding: 8px; }
+  .chat {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    text-align: left;
+    border: 0;
+    border-radius: 8px;
+    padding: 8px;
+    margin-bottom: 4px;
+    background: transparent;
+  }
+  .chat.on { background: var(--user); }
+  .chat span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat .x { border: 0; padding: 0 4px; color: var(--muted); }
+  main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #log {
+    flex: 1;
+    overflow: auto;
+    padding: 28px 8vw 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .bubble { max-width: 720px; white-space: pre-wrap; word-break: break-word; }
+  .bubble.user { align-self: flex-end; background: var(--user); border-radius: 12px; padding: 10px 14px; }
+  .bubble.assistant { align-self: flex-start; }
+  .think { color: var(--muted); font-size: 14px; margin-bottom: 6px; }
+  .empty { color: var(--muted); margin: auto; }
+  .row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; color: var(--muted); font-size: 14px; }
+  .row label { display: flex; align-items: center; gap: 6px; }
+  textarea {
+    width: 100%;
+    resize: none;
+    min-height: 52px;
+    max-height: 200px;
+    background: var(--side);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+  }
+  .actions { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+  #warn { color: var(--danger); font-size: 13px; min-height: 1.2em; }
+  #sendstop { display: flex; gap: 8px; }
+</style>
+</head>
+<body>
+<aside>
+  <header class="side"><button id="new" type="button">新对话</button></header>
+  <div id="list"></div>
+</aside>
+<main>
+  <div id="log"><div class="empty">开始一段对话</div></div>
+  <form class="composer" id="form">
+    <div class="row">
+      <label>温度 <input id="temp" type="range" min="0" max="1" step="0.1" value="0.7"></label>
+      <span id="tempv">0.7</span>
+      <label><input id="think" type="checkbox"> 思考</label>
+    </div>
+    <textarea id="box" rows="2" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
+    <div class="actions">
+      <div id="warn"></div>
+      <div id="sendstop">
+        <button id="stop" type="button" disabled>停止</button>
+        <button id="send" class="primary" type="submit">发送</button>
+      </div>
+    </div>
+  </form>
+</main>
+<script>
+const log = document.getElementById("log")
+const list = document.getElementById("list")
+const box = document.getElementById("box")
+const warn = document.getElementById("warn")
+const sendBtn = document.getElementById("send")
+const stopBtn = document.getElementById("stop")
+const temp = document.getElementById("temp")
+const tempv = document.getElementById("tempv")
+const think = document.getElementById("think")
+
+let context = 32768
+let topP = 0.9
+let catalog = []
+let current = null
+let messages = []
+let live = { content: "", reasoning: "" }
+let busy = false
+let ctrl = null
+let saveOnAbort = false
+
+temp.value = localStorage.getItem("tokenrush.temperature") || "0.7"
+think.checked = localStorage.getItem("tokenrush.think") === "1"
+tempv.textContent = Number(temp.value).toFixed(1)
+temp.addEventListener("input", () => {
+  tempv.textContent = Number(temp.value).toFixed(1)
+  localStorage.setItem("tokenrush.temperature", temp.value)
+})
+think.addEventListener("change", () => localStorage.setItem("tokenrush.think", think.checked ? "1" : "0"))
+
+function estimate() {
+  let n = box.value.length
+  for (const m of messages) n += (m.content || "").length
+  n += live.content.length + live.reasoning.length
+  return Math.ceil(n / 2)
+}
+
+function refreshWarn() {
+  const tokens = estimate()
+  warn.textContent = tokens > context * 0.8 ? `大约 ${tokens} 个 token，接近 ${context} 的窗口。开一段新对话。` : ""
+}
+
+function renderLog() {
+  log.replaceChildren()
+  if (!messages.length && !live.content && !live.reasoning) {
+    const e = document.createElement("div")
+    e.className = "empty"
+    e.textContent = "开始一段对话"
+    log.append(e)
+    refreshWarn()
+    return
+  }
+  for (const m of messages) appendBubble(m.role, m.content, m.reasoning)
+  if (busy) appendBubble("assistant", live.content, live.reasoning)
+  log.scrollTop = log.scrollHeight
+  refreshWarn()
+}
+
+function appendBubble(role, content, reasoning) {
+  const el = document.createElement("div")
+  el.className = "bubble " + (role === "user" ? "user" : "assistant")
+  if (role !== "user" && reasoning) {
+    const t = document.createElement("div")
+    t.className = "think"
+    t.textContent = reasoning
+    el.append(t)
+  }
+  const body = document.createElement("div")
+  body.textContent = content || ""
+  el.append(body)
+  log.append(el)
+}
+
+function renderList() {
+  list.replaceChildren()
+  for (const c of catalog) {
+    const row = document.createElement("div")
+    row.className = "chat" + (current && current.id === c.id ? " on" : "")
+    const title = document.createElement("span")
+    title.textContent = c.title || "新对话"
+    const x = document.createElement("button")
+    x.type = "button"
+    x.className = "x"
+    x.textContent = "×"
+    x.title = "删除"
+    x.addEventListener("click", (ev) => { ev.stopPropagation(); remove(c.id) })
+    row.append(title, x)
+    row.addEventListener("click", () => open(c.id))
+    list.append(row)
+  }
+}
+
+async function loadCatalog() {
+  const r = await fetch("/chats")
+  catalog = await r.json()
+  renderList()
+}
+
+async function open(id) {
+  halt(false)
+  const r = await fetch("/chats/" + id)
+  if (!r.ok) return
+  current = await r.json()
+  messages = current.messages.slice()
+  live = { content: "", reasoning: "" }
+  renderLog()
+  renderList()
+}
+
+function blank() {
+  current = null
+  messages = []
+  live = { content: "", reasoning: "" }
+  renderLog()
+  renderList()
+  box.focus()
+}
+
+async function remove(id) {
+  halt(false)
+  const r = await fetch("/chats/" + id, { method: "DELETE" })
+  if (!r.ok && r.status !== 404) return
+  if (current && current.id === id) blank()
+  await loadCatalog()
+}
+
+function setBusy(on) {
+  busy = on
+  sendBtn.disabled = on
+  stopBtn.disabled = !on
+  box.disabled = on
+}
+
+function halt(save) {
+  saveOnAbort = !!save
+  if (ctrl) ctrl.abort()
+  ctrl = null
+}
+
+async function save() {
+  if (!current) {
+    current = { id: crypto.randomUUID().replace(/-/g, ""), title: "", created: Math.floor(Date.now() / 1000), messages: [] }
+  }
+  current.messages = messages.map(m => ({ role: m.role, content: m.content }))
+  const r = await fetch("/chats/" + current.id, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ title: current.title, created: current.created, messages: current.messages })
+  })
+  if (!r.ok) throw new Error(await r.text())
+  current = await r.json()
+  await loadCatalog()
+}
+
+document.getElementById("new").addEventListener("click", () => { halt(false); blank() })
+
+box.addEventListener("input", refreshWarn)
+box.addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" && !ev.shiftKey) {
+    ev.preventDefault()
+    document.getElementById("form").requestSubmit()
+  }
+})
+
+stopBtn.addEventListener("click", () => halt(true))
+
+document.getElementById("form").addEventListener("submit", async (ev) => {
+  ev.preventDefault()
+  const text = box.value.trim()
+  if (!text || busy) return
+  box.value = ""
+  messages.push({ role: "user", content: text })
+  live = { content: "", reasoning: "" }
+  setBusy(true)
+  renderLog()
+  ctrl = new AbortController()
+  const signal = ctrl.signal
+  try {
+    const res = await fetch("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      signal,
+      body: JSON.stringify({
+        model: "token-rush",
+        temperature: Number(temp.value),
+        top_p: topP,
+        stream: true,
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        chat_template_kwargs: { enable_thinking: think.checked }
+      })
+    })
+    if (!res.ok) throw new Error((await res.text()) || res.statusText)
+    const reader = res.body.getReader()
+    const dec = new TextDecoder()
+    let buf = ""
+    while (true) {
+      const step = await reader.read()
+      if (step.done) break
+      buf += dec.decode(step.value, { stream: true })
+      const parts = buf.split("\n\n")
+      buf = parts.pop()
+      for (const part of parts) {
+        const line = part.split("\n").find(l => l.startsWith("data:"))
+        if (!line) continue
+        const data = line.slice(5).trim()
+        if (data === "[DONE]") continue
+        const obj = JSON.parse(data)
+        if (obj.error) throw new Error(obj.error.message || "生成失败")
+        const delta = obj.choices && obj.choices[0] && obj.choices[0].delta
+        if (!delta) continue
+        if (delta.reasoning_content) live.reasoning += delta.reasoning_content
+        if (delta.content) live.content += delta.content
+        renderLog()
+      }
+    }
+    if (live.content || live.reasoning) messages.push({ role: "assistant", content: live.content, reasoning: live.reasoning })
+    live = { content: "", reasoning: "" }
+    await save()
+    renderLog()
+  } catch (e) {
+    if (e.name === "AbortError") {
+      if (!saveOnAbort) return
+      if (live.content) messages.push({ role: "assistant", content: live.content, reasoning: live.reasoning })
+      live = { content: "", reasoning: "" }
+      try { await save() } catch (_) {}
+      renderLog()
+    } else {
+      live = { content: "", reasoning: "" }
+      messages.push({ role: "assistant", content: "出错了：" + e.message })
+      try { await save() } catch (_) {}
+      renderLog()
+    }
+  } finally {
+    ctrl = null
+    setBusy(false)
+  }
+})
+
+fetch("/health").then(r => r.json()).then(h => {
+  if (h.context) context = h.context
+  if (typeof h.top_p === "number") topP = h.top_p
+  if (!localStorage.getItem("tokenrush.temperature") && typeof h.temperature === "number") {
+    temp.value = String(h.temperature)
+    tempv.textContent = Number(temp.value).toFixed(1)
+  }
+  refreshWarn()
+}).catch(() => {})
+
+loadCatalog().then(() => { if (catalog.length) return open(catalog[0].id) })
+</script>
+</body>
+</html>

@@ -26,6 +26,7 @@ import torch
 
 from .chat import (OutputParser, StopFilter, from_anthropic, from_openai, render, tools_from_anthropic,
                    tools_from_openai)
+from .chats import ChatError, ChatStore, default_chats_path
 from .session import Session
 
 # ------------------------------------------------------------ the worker
@@ -128,10 +129,12 @@ class Worker:
 
 def build_app(session: Session, tok, cfg, args):
     from fastapi import FastAPI, HTTPException, Request
-    from fastapi.responses import JSONResponse, StreamingResponse
+    from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
     app = FastAPI(title="token-rush")
     worker = Worker(session, tok)
+    store = ChatStore(getattr(args, "chats", None) or default_chats_path())
+    web = os.path.join(os.path.dirname(__file__), "web", "index.html")
     served = args.served_name
     max_len = session.max_len
     reserve = 8 + 2                                            # a spec step may process K+1 tokens past the prompt
@@ -215,9 +218,45 @@ def build_app(session: Session, tok, cfg, args):
         auth(req)
         return {**model_entries()[0], "id": name, "display_name": name}
 
+    @app.get("/")
+    def home():
+        return FileResponse(web)
+
+    def chat_call(fn, *a):
+        try:
+            return fn(*a)
+        except ChatError as e:
+            raise HTTPException(400, str(e))
+
+    @app.get("/chats")
+    def chats_list(req: Request):
+        auth(req)
+        return store.list()
+
+    @app.get("/chats/{chat_id}")
+    def chats_get(chat_id: str, req: Request):
+        auth(req)
+        found = chat_call(store.get, chat_id)
+        if found is None:
+            raise HTTPException(404, "no such chat")
+        return found
+
+    @app.put("/chats/{chat_id}")
+    async def chats_put(chat_id: str, req: Request):
+        auth(req)
+        return chat_call(store.put, chat_id, await req.json())
+
+    @app.delete("/chats/{chat_id}")
+    def chats_delete(chat_id: str, req: Request):
+        auth(req)
+        if not chat_call(store.delete, chat_id):
+            raise HTTPException(404, "no such chat")
+        return {"ok": True}
+
     @app.get("/health")
     async def health():
-        return {"status": "ok", "busy": worker.busy, "queued": worker.jobs.qsize(), "context": max_len}
+        return {"status": "ok", "busy": worker.busy, "queued": worker.jobs.qsize(), "context": max_len,
+                "temperature": args.temperature, "top_p": args.top_p}
 
     @app.get("/stats")
     async def stats():
@@ -544,6 +583,7 @@ def main():
     ap.add_argument("--temperature", type=float, default=0.7, help="when the request does not say")
     ap.add_argument("--top-p", type=float, default=0.9)
     ap.add_argument("--max-new", type=int, default=8192, help="max_tokens when the request does not say")
+    ap.add_argument("--chats", default=default_chats_path(), help="JSON file the web page saves conversations in")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--api-key", default=os.environ.get("TOKENRUSH_API_KEY"), help="require it as x-api-key / Bearer")
@@ -551,6 +591,8 @@ def main():
     ap.add_argument("--alias", action="append", default=[], help="extra model names to list")
     args = ap.parse_args()
     session, tok, cfg = load_session(args)
+    print(f"chat page http://{args.host}:{args.port}/", flush=True)
+    print(f"conversations {args.chats}", flush=True)
     import uvicorn
     uvicorn.run(build_app(session, tok, cfg, args), host=args.host, port=args.port, log_level="warning")
 

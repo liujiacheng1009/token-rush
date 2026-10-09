@@ -84,7 +84,7 @@ uv run python -m tokenrush.run --chat --max-new 512 --prompt "..."
 
 ## 4. 本地服务
 
-引擎常驻，一次只处理一个请求，后面的排队。对话上下文留在 GPU 上，下一轮只 prefill 新增的 token。
+引擎常驻，一次只处理一个请求，后面的排队。对话上下文留在 GPU 上，下一轮只 prefill 新增的 token。同一个进程在 [http://127.0.0.1:8000/](http://127.0.0.1:8000/) 提供本机网页，架构在 [chatbot.md](chatbot.md)。
 
 ```bash
 uv run python -m tokenrush.serve --port 8000

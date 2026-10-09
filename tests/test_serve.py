@@ -151,6 +151,36 @@ def test_anthropic_rejects_without_max_tokens_and_lists_models():
     assert c.get("/health").json()["status"] == "ok"
 
 
+def test_chat_page_and_saved_transcripts(tmp_path):
+    from fastapi.testclient import TestClient
+    from tokenrush.serve import build_app
+
+    class Unused:
+        max_len = 32768
+
+    path = tmp_path / "chats.json"
+    args = types.SimpleNamespace(api_key=None, think="auto", temperature=0.7, top_p=0.9, max_new=512, draft="auto",
+                                 served_name="token-rush", alias=[], chats=str(path))
+    c = TestClient(build_app(Unused(), None, None, args))
+    page = c.get("/")
+    assert page.status_code == 200 and "新对话" in page.text
+    assert c.get("/chats").json() == []
+    saved = c.put("/chats/abc", json={"title": "草稿", "messages": [{"role": "user", "content": "你好"}]}).json()
+    assert saved["title"] == "草稿" and saved["messages"] == [{"role": "user", "content": "你好"}]
+    assert c.get("/chats/abc").json()["messages"][0]["content"] == "你好"
+    assert c.get("/chats").json()[0]["id"] == "abc"
+    # a title is taken from the first user line when the client does not send one
+    auto = c.put("/chats/def", json={"messages": [{"role": "user", "content": "第二段对话的开头"}]}).json()
+    assert auto["title"] == "第二段对话的开头"
+    assert c.put("/chats/abc", json={"messages": [{"role": "tool", "content": "x"}]}).status_code == 400
+    assert c.put("/chats/bad!id", json={"messages": []}).status_code == 400
+    assert c.get("/chats/abc").json()["messages"][0]["role"] == "user"   # the rejected put did not replace it
+    assert c.delete("/chats/abc").status_code == 200
+    assert c.get("/chats/abc").status_code == 404
+    assert c.delete("/chats/abc").status_code == 404
+    assert json.loads(path.read_text())["chats"][0]["id"] == "def"
+
+
 def test_api_key_required_when_set():
     from fastapi.testclient import TestClient
     from tokenrush.serve import build_app
