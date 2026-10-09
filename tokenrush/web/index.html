@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Token Rush</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@vscode/codicons@0.0.36/dist/codicon.css">
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
 <style>
   :root {
     color-scheme: dark;
@@ -52,6 +54,90 @@
   button.primary { background: var(--accent); color: #1a140c; border-color: var(--accent); }
   button.danger { color: var(--danger); }
   #new { width: 100%; }
+  footer.side {
+    flex: none;
+    border-top: 1px solid var(--line);
+    padding: 12px 14px;
+  }
+  header.bar {
+    flex: none;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 4px;
+    height: 52px;
+    font-family: "Noto Sans CJK SC", "Noto Sans SC", "PingFang SC", sans-serif;
+    font-size: 14px;
+  }
+  header.bar button {
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    border-radius: 999px;
+    padding: 5px 14px;
+  }
+  header.bar button.on { color: var(--text); background: var(--user); }
+  header.bar button:hover { color: var(--text); border: 0; }
+  #log[hidden], .composer[hidden], #ide[hidden], aside[hidden], #editor[hidden], #monaco[hidden], #pane-files[hidden], #pane-search[hidden] { display: none !important; }
+  #ide {
+    flex: 1; min-height: 0; display: flex; flex-direction: column;
+    background: #1e1e1e; color: #cccccc;
+    font-family: "Noto Sans CJK SC", "Noto Sans SC", sans-serif;
+  }
+  .ide-bar {
+    flex: none; display: flex; align-items: center; gap: 4px;
+    height: 36px; padding: 0 8px; background: #252526;
+    border-bottom: 1px solid #333; font-size: 13px;
+  }
+  .ide-bar button, .activity button, .tabs button, .tree button, #search-hits button {
+    border: 0; background: transparent; color: inherit; border-radius: 4px; padding: 4px;
+  }
+  .ide-bar button:hover, .activity button:hover, .tabs button:hover, .tree button:hover { background: #2a2d2e; }
+  #crumbs { flex: 1; display: flex; align-items: center; gap: 2px; overflow: hidden; min-width: 0; }
+  #crumbs button { padding: 2px 4px; color: #ccc; }
+  #crumbs .sep { color: #666; }
+  #ide-who { color: #888; margin-left: 8px; }
+  .ide-body { flex: 1; min-height: 0; display: flex; }
+  .activity { width: 48px; flex: none; background: #333333; display: flex; flex-direction: column; align-items: center; padding-top: 6px; gap: 2px; }
+  .activity button { width: 48px; height: 48px; border-radius: 0; color: #858585; font-size: 24px; }
+  .activity button.on { color: #fff; border-left: 2px solid #fff; }
+  .sidepane { width: 260px; flex: none; display: flex; flex-direction: column; min-height: 0; background: #252526; border-right: 1px solid #333; }
+  #pane-files, #pane-search { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .pane-title { flex: none; padding: 8px 12px 4px; font-size: 11px; letter-spacing: 0.04em; color: #bbb; }
+  .tree, #search-hits { flex: 1; overflow: auto; padding: 4px 0 8px; font-size: 13px; }
+  .tree button, #search-hits button {
+    display: flex; align-items: center; gap: 4px; width: 100%; text-align: left;
+    border-radius: 0; padding-top: 2px; padding-bottom: 2px; font-size: 13px;
+  }
+  .tree button.on, #search-hits button.on { background: #37373d; }
+  .tree .codicon, #search-hits .codicon { flex: none; font-size: 16px; }
+  .tree .twist { width: 16px; }
+  #file-search { margin: 4px 8px 8px; width: calc(100% - 16px); background: #3c3c3c; color: inherit; border: 1px solid #3c3c3c; border-radius: 2px; padding: 4px 6px; font-size: 13px; }
+  .editor-wrap { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+  .tabs { flex: none; display: flex; height: 35px; background: #252526; overflow: auto; }
+  .tabs button { display: flex; align-items: center; gap: 6px; height: 35px; padding: 0 10px; border-right: 1px solid #252526; border-radius: 0; color: #969696; white-space: nowrap; }
+  .tabs button.on { background: #1e1e1e; color: #fff; }
+  .tabs .codicon-close { font-size: 14px; opacity: 0.7; }
+  #monaco, #editor { flex: 1; min-height: 0; width: 100%; }
+  #editor {
+    resize: none; border: 0; outline: none;
+    background: #1e1e1e; color: #d4d4d4;
+    font: 14px/1.55 ui-monospace, "Sarasa Mono SC", monospace;
+    padding: 12px 16px;
+  }
+  .vibe { width: 360px; flex: none; display: flex; flex-direction: column; border-left: 1px solid #333; border-right: 0; background: #1e1e1e; }
+  #vibe-log { flex: 1; min-height: 0; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; font-size: 14px; }
+  #vibe-log .who { color: #888; font-size: 12px; }
+  #vibe-log .tool { color: #888; font-size: 12px; }
+  #vibe-box { width: 100%; resize: none; min-height: 64px; background: #252526; color: inherit; border-color: #333; font-size: 14px; }
+  .picker {
+    position: absolute; inset: 48px 8vw auto; z-index: 4;
+    background: #252526; border: 1px solid #444; border-radius: 10px;
+    padding: 12px; max-height: 70%; display: flex; flex-direction: column; gap: 8px;
+  }
+  .picker[hidden] { display: none !important; }
+  #picker-list { overflow: auto; min-height: 0; }
+  #ide { position: relative; }
   #list { overflow: auto; flex: 1; padding: 8px; }
   .chat {
     display: flex;
@@ -174,7 +260,7 @@
   }
   .actions { display: flex; justify-content: flex-end; align-items: center; margin-top: 8px; }
   #sendstop { display: flex; gap: 8px; }
-  #who { color: var(--muted); font-size: 13px; padding: 8px 4px 0; }
+  #who { color: var(--muted); font-size: 13px; }
   #gate {
     position: fixed;
     inset: 0;
@@ -211,9 +297,9 @@
 <aside>
   <header class="side">
     <button id="new" type="button">新对话</button>
-    <div id="who"></div>
   </header>
   <div id="list"></div>
+  <footer class="side"><div id="who"></div></footer>
 </aside>
 <div id="gate" hidden>
   <form id="gateform">
@@ -224,6 +310,56 @@
   </form>
 </div>
 <main>
+  <header class="bar">
+    <button id="mode-chat" class="on" type="button">对话</button>
+    <button id="mode-code" type="button">写代码</button>
+  </header>
+  <div id="ide" hidden>
+    <div class="ide-bar">
+      <button id="open-dir" type="button" title="打开目录"><i class="codicon codicon-folder-opened"></i></button>
+      <nav id="crumbs"></nav>
+      <button id="save-file" type="button" title="保存"><i class="codicon codicon-save"></i></button>
+      <span id="ide-who"></span>
+    </div>
+    <div class="ide-body">
+      <div class="activity">
+        <button id="act-files" class="on" type="button" title="资源管理器"><i class="codicon codicon-files"></i></button>
+        <button id="act-search" type="button" title="搜索"><i class="codicon codicon-search"></i></button>
+      </div>
+      <div class="sidepane">
+        <div id="pane-files">
+          <div class="pane-title">资源管理器</div>
+          <div class="tree" id="tree"></div>
+        </div>
+        <div id="pane-search" hidden>
+          <div class="pane-title">搜索</div>
+          <input id="file-search" placeholder="按文件名搜索" autocomplete="off">
+          <div id="search-hits"></div>
+        </div>
+      </div>
+      <div class="editor-wrap">
+        <div class="tabs" id="tabs"></div>
+        <div id="monaco" hidden></div>
+        <textarea id="editor" spellcheck="false" placeholder="从左侧打开一个文件"></textarea>
+      </div>
+      <aside class="vibe">
+        <div id="vibe-log"><div class="empty">说一句话，让它改这个目录里的文件</div></div>
+        <form id="vibe-form" class="composer">
+          <textarea id="vibe-box" rows="2" placeholder="改代码或写文档，Enter 发送"></textarea>
+          <div class="actions"><button id="vibe-send" class="primary" type="submit">发送</button></div>
+        </form>
+      </aside>
+    </div>
+    <div id="picker" class="picker" hidden>
+      <div id="picker-path"></div>
+      <div id="picker-list"></div>
+      <div class="actions">
+        <button id="picker-up" type="button">上级</button>
+        <button id="picker-open" class="primary" type="button">在此打开</button>
+        <button id="picker-close" type="button">取消</button>
+      </div>
+    </div>
+  </div>
   <div id="log"><div class="empty">开始一段对话</div></div>
   <form class="composer" id="form">
     <div class="row">
@@ -705,6 +841,8 @@ function showSeat(ip) {
   seated = true
   gate.hidden = true
   who.textContent = "登录 " + ip
+  const ideWho = document.getElementById("ide-who")
+  if (ideWho) ideWho.textContent = ip
 }
 
 function showGate(holder, kicked) {
@@ -923,6 +1061,485 @@ document.getElementById("form").addEventListener("submit", async (ev) => {
 })
 
 loadKatex()
+
+const ide = document.getElementById("ide")
+const tree = document.getElementById("tree")
+const editor = document.getElementById("editor")
+const monacoHost = document.getElementById("monaco")
+const tabsEl = document.getElementById("tabs")
+const crumbs = document.getElementById("crumbs")
+const picker = document.getElementById("picker")
+const pickerPath = document.getElementById("picker-path")
+const pickerList = document.getElementById("picker-list")
+const vibeLog = document.getElementById("vibe-log")
+const vibeBox = document.getElementById("vibe-box")
+const MONACO_VS = "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs"
+let workspace = localStorage.getItem("tokenrush.workspace") || ""
+let browse = ""
+let vibeMessages = []
+let vibeCtrl = null
+let monacoEditor = null
+let monacoPromise = null
+const openOrder = []
+const saved = new Map()
+const fallbackText = new Map()
+const expanded = new Set()
+const dirCache = new Map()
+let active = ""
+
+function langOf(path) {
+  const ext = path.includes(".") ? path.split(".").pop().toLowerCase() : ""
+  const map = {
+    py: "python", js: "javascript", mjs: "javascript", jsx: "javascript",
+    ts: "typescript", tsx: "typescript", md: "markdown", json: "json",
+    html: "html", css: "css", yml: "yaml", yaml: "yaml", sh: "shell",
+    rs: "rust", go: "go", c: "c", h: "c", cpp: "cpp", toml: "ini", xml: "xml"
+  }
+  return map[ext] || "plaintext"
+}
+function iconOf(name, dir) {
+  if (dir) return "codicon-folder"
+  const ext = name.includes(".") ? name.split(".").pop().toLowerCase() : ""
+  const map = {
+    py: "codicon-file-code", js: "codicon-file-code", ts: "codicon-file-code",
+    jsx: "codicon-file-code", tsx: "codicon-file-code", go: "codicon-file-code",
+    rs: "codicon-file-code", c: "codicon-file-code", cpp: "codicon-file-code",
+    md: "codicon-markdown", json: "codicon-json", html: "codicon-file-code", css: "codicon-file-code"
+  }
+  return map[ext] || "codicon-file"
+}
+
+function currentText() {
+  if (monacoEditor && monacoEditor.getModel()) return monacoEditor.getValue()
+  return editor.value
+}
+function isDirty(path) {
+  const base = saved.get(path)
+  if (base === undefined) return false
+  if (path === active) return currentText() !== base
+  if (monacoEditor && window.monaco) {
+    const model = monaco.editor.getModel(monaco.Uri.file(path))
+    if (model) return model.getValue() !== base
+  }
+  return (fallbackText.get(path) ?? base) !== base
+}
+
+function ensureMonaco() {
+  if (monacoPromise) return monacoPromise
+  monacoPromise = new Promise((resolve) => {
+    if (!window.require) { resolve(null); return }
+    const timer = setTimeout(() => resolve(null), 8000)
+    window.MonacoEnvironment = {
+      getWorkerUrl: function () {
+        const code = "self.MonacoEnvironment={baseUrl:'" + MONACO_VS.replace(/\/vs$/, "/") + "'};importScripts('" + MONACO_VS + "/base/worker/workerMain.js');"
+        return "data:text/javascript;charset=utf-8," + encodeURIComponent(code)
+      }
+    }
+    require.config({ paths: { vs: MONACO_VS } })
+    require(["vs/editor/editor.main"], function () {
+      clearTimeout(timer)
+      if (monacoEditor) { resolve(monacoEditor); return }
+      monacoEditor = monaco.editor.create(monacoHost, {
+        value: "",
+        language: "plaintext",
+        theme: "vs-dark",
+        automaticLayout: true,
+        minimap: { enabled: true },
+        fontSize: 14,
+        scrollBeyondLastLine: false,
+        wordWrap: "on"
+      })
+      monacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => saveFile())
+      monacoEditor.onDidChangeModelContent(() => renderTabs())
+      for (const path of openOrder) putText(path, fallbackText.get(path) ?? saved.get(path) ?? "")
+      if (active) {
+        const model = monaco.editor.getModel(monaco.Uri.file(active))
+        if (model) monacoEditor.setModel(model)
+      }
+      editor.hidden = true
+      monacoHost.hidden = false
+      monacoEditor.layout()
+      renderTabs()
+      resolve(monacoEditor)
+    }, function () { clearTimeout(timer); resolve(null) })
+  })
+  return monacoPromise
+}
+
+function showCode(on) {
+  document.querySelector("body > aside").hidden = on
+  document.getElementById("log").hidden = on
+  document.getElementById("form").hidden = on
+  ide.hidden = !on
+  document.getElementById("mode-chat").classList.toggle("on", !on)
+  document.getElementById("mode-code").classList.toggle("on", on)
+  if (on) {
+    ensureMonaco().then(() => { if (monacoEditor) monacoEditor.layout() })
+    if (!tree.childElementCount) openWorkspace(workspace)
+  }
+}
+document.getElementById("mode-chat").addEventListener("click", () => showCode(false))
+document.getElementById("mode-code").addEventListener("click", () => showCode(true))
+document.getElementById("act-files").addEventListener("click", () => showPane("files"))
+document.getElementById("act-search").addEventListener("click", () => showPane("search"))
+function showPane(which) {
+  document.getElementById("pane-files").hidden = which !== "files"
+  document.getElementById("pane-search").hidden = which !== "search"
+  document.getElementById("act-files").classList.toggle("on", which === "files")
+  document.getElementById("act-search").classList.toggle("on", which === "search")
+  if (which === "search") document.getElementById("file-search").focus()
+}
+
+async function fsList(path) {
+  const r = await fetch("/fs/list?path=" + encodeURIComponent(path || ""))
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "打不开目录")
+  return r.json()
+}
+
+function renderCrumbs() {
+  crumbs.innerHTML = ""
+  const parts = workspace.split("/").filter(Boolean)
+  let acc = ""
+  parts.forEach((name, i) => {
+    acc += "/" + name
+    if (i) {
+      const sep = document.createElement("span")
+      sep.className = "sep"
+      sep.textContent = "›"
+      crumbs.append(sep)
+    }
+    const btn = document.createElement("button")
+    btn.type = "button"
+    btn.textContent = name
+    const target = acc
+    btn.addEventListener("click", () => openWorkspace(target))
+    crumbs.append(btn)
+  })
+}
+
+function renderTabs() {
+  tabsEl.innerHTML = ""
+  for (const path of openOrder) {
+    const btn = document.createElement("button")
+    btn.type = "button"
+    btn.className = path === active ? "on" : ""
+    const label = document.createElement("span")
+    label.textContent = path.split("/").pop() + (isDirty(path) ? " ●" : "")
+    const close = document.createElement("i")
+    close.className = "codicon codicon-close"
+    close.addEventListener("click", (ev) => { ev.stopPropagation(); closeTab(path) })
+    btn.append(label, close)
+    btn.addEventListener("click", () => showTab(path))
+    tabsEl.append(btn)
+  }
+}
+
+function stashActive() {
+  if (!active || monacoEditor) return
+  fallbackText.set(active, editor.value)
+}
+
+function showTab(path) {
+  stashActive()
+  active = path
+  if (monacoEditor && window.monaco) {
+    const model = monaco.editor.getModel(monaco.Uri.file(path))
+    if (model) monacoEditor.setModel(model)
+  } else {
+    editor.value = fallbackText.get(path) ?? saved.get(path) ?? ""
+  }
+  renderTabs()
+  markTree()
+}
+
+function closeTab(path) {
+  const i = openOrder.indexOf(path)
+  if (i < 0) return
+  openOrder.splice(i, 1)
+  saved.delete(path)
+  fallbackText.delete(path)
+  if (active === path) {
+    active = openOrder[i] || openOrder[i - 1] || ""
+    if (active) showTab(active)
+    else if (monacoEditor) monacoEditor.setModel(null)
+    else editor.value = ""
+  }
+  if (monacoEditor && window.monaco) {
+    const model = monaco.editor.getModel(monaco.Uri.file(path))
+    if (model && (!monacoEditor.getModel() || monacoEditor.getModel().uri.path !== path)) model.dispose()
+  }
+  renderTabs()
+  markTree()
+}
+
+function markTree() {
+  tree.querySelectorAll("button").forEach((btn) => btn.classList.toggle("on", btn.dataset.path === active))
+}
+
+async function drawDir(path, depth, parent) {
+  let dir = dirCache.get(path)
+  if (!dir) {
+    dir = await fsList(path)
+    dirCache.set(path, dir)
+  }
+  for (const ent of dir.entries) {
+    const full = dir.path + "/" + ent.name
+    const btn = document.createElement("button")
+    btn.type = "button"
+    btn.dataset.path = full
+    btn.style.paddingLeft = (4 + depth * 12) + "px"
+    const twist = document.createElement("i")
+    twist.className = "codicon twist " + (ent.dir ? (expanded.has(full) ? "codicon-chevron-down" : "codicon-chevron-right") : "")
+    const icon = document.createElement("i")
+    icon.className = "codicon " + (ent.dir && expanded.has(full) ? "codicon-folder-opened" : iconOf(ent.name, ent.dir))
+    btn.append(twist, icon, document.createTextNode(ent.name))
+    if (full === active) btn.classList.add("on")
+    btn.addEventListener("click", () => {
+      if (!ent.dir) { openFile(full); return }
+      if (expanded.has(full)) expanded.delete(full)
+      else expanded.add(full)
+      renderTree()
+    })
+    parent.append(btn)
+    if (ent.dir && expanded.has(full)) await drawDir(full, depth + 1, parent)
+  }
+}
+
+async function renderTree() {
+  tree.innerHTML = ""
+  if (!workspace) return
+  await drawDir(workspace, 0, tree)
+}
+
+async function openWorkspace(path) {
+  try {
+    const dir = await fsList(path)
+    if (dir.path !== workspace) {
+      if (monacoEditor) monacoEditor.setModel(null)
+      if (window.monaco) {
+        for (const opened of openOrder) {
+          const model = monaco.editor.getModel(monaco.Uri.file(opened))
+          if (model) model.dispose()
+        }
+      }
+      openOrder.splice(0)
+      saved.clear()
+      fallbackText.clear()
+      active = ""
+      if (monacoEditor) monacoEditor.setModel(null)
+      else editor.value = ""
+      renderTabs()
+    }
+    workspace = dir.path
+    localStorage.setItem("tokenrush.workspace", workspace)
+    dirCache.clear()
+    expanded.clear()
+    dirCache.set(workspace, dir)
+    renderCrumbs()
+    await renderTree()
+  } catch (e) {
+    if (path) return openWorkspace("")
+    crumbs.textContent = e.message
+  }
+}
+
+function putText(path, text) {
+  if (monacoEditor && window.monaco) {
+    let model = monaco.editor.getModel(monaco.Uri.file(path))
+    if (!model) model = monaco.editor.createModel(text, langOf(path), monaco.Uri.file(path))
+    else {
+      if (model.getValue() !== text) model.setValue(text)
+      monaco.editor.setModelLanguage(model, langOf(path))
+    }
+    if (path === active) monacoEditor.setModel(model)
+    return
+  }
+  fallbackText.set(path, text)
+  if (path === active) editor.value = text
+}
+
+async function openFile(path) {
+  if (openOrder.includes(path)) { showTab(path); return }
+  const r = await fetch("/fs/file?path=" + encodeURIComponent(path))
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok) return
+  openOrder.push(path)
+  saved.set(path, j.content)
+  active = path
+  putText(path, j.content)
+  renderTabs()
+  markTree()
+}
+
+async function saveFile() {
+  if (!active) return
+  const text = currentText()
+  const r = await fetch("/fs/file", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path: active, content: text, root: workspace })
+  })
+  if (!r.ok) return
+  saved.set(active, text)
+  renderTabs()
+}
+document.getElementById("save-file").addEventListener("click", saveFile)
+window.addEventListener("keydown", (ev) => {
+  if (ide.hidden) return
+  if ((ev.metaKey || ev.ctrlKey) && ev.key === "s") { ev.preventDefault(); saveFile() }
+})
+editor.addEventListener("input", () => renderTabs())
+
+async function fillPicker(path) {
+  const dir = await fsList(path)
+  browse = dir.path
+  pickerPath.textContent = dir.path
+  pickerList.innerHTML = ""
+  for (const ent of dir.entries) {
+    if (!ent.dir) continue
+    const btn = document.createElement("button")
+    btn.type = "button"
+    btn.textContent = ent.name
+    btn.addEventListener("click", () => fillPicker(dir.path + "/" + ent.name))
+    pickerList.append(btn)
+  }
+  document.getElementById("picker-up").disabled = !dir.parent
+  document.getElementById("picker-up").onclick = () => { if (dir.parent) fillPicker(dir.parent) }
+}
+document.getElementById("open-dir").addEventListener("click", async () => {
+  picker.hidden = false
+  await fillPicker(workspace || "")
+})
+document.getElementById("picker-close").addEventListener("click", () => { picker.hidden = true })
+document.getElementById("picker-open").addEventListener("click", async () => {
+  picker.hidden = true
+  await openWorkspace(browse)
+})
+let searchTimer = null
+document.getElementById("file-search").addEventListener("input", () => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(runSearch, 200)
+})
+async function runSearch() {
+  const q = document.getElementById("file-search").value.trim().toLowerCase()
+  const hits = document.getElementById("search-hits")
+  hits.innerHTML = ""
+  if (!q || !workspace) return
+  const found = []
+  let calls = 0
+  async function walk(path, depth) {
+    if (depth > 4 || found.length >= 80 || calls >= 40) return
+    calls++
+    let dir = dirCache.get(path)
+    if (!dir) {
+      dir = await fsList(path)
+      dirCache.set(path, dir)
+    }
+    for (const ent of dir.entries) {
+      const full = dir.path + "/" + ent.name
+      if (ent.name.toLowerCase().includes(q)) found.push({ full, name: ent.name, dir: ent.dir })
+      if (ent.dir && found.length < 80) await walk(full, depth + 1)
+    }
+  }
+  await walk(workspace, 0)
+  for (const hit of found) {
+    const btn = document.createElement("button")
+    btn.type = "button"
+    const icon = document.createElement("i")
+    icon.className = "codicon " + iconOf(hit.name, hit.dir)
+    btn.append(icon, document.createTextNode(hit.full.slice(workspace.length + 1)))
+    btn.addEventListener("click", () => hit.dir ? revealDir(hit.full) : openFile(hit.full))
+    hits.append(btn)
+  }
+}
+async function revealDir(path) {
+  let acc = ""
+  for (const name of path.split("/").filter(Boolean)) {
+    acc += "/" + name
+    if (acc === workspace || acc.startsWith(workspace + "/")) expanded.add(acc)
+  }
+  showPane("files")
+  await renderTree()
+}
+
+function vibeLine(cls, text) {
+  if (vibeLog.querySelector(".empty")) vibeLog.innerHTML = ""
+  const el = document.createElement("div")
+  el.className = cls
+  el.textContent = text
+  vibeLog.append(el)
+  vibeLog.scrollTop = vibeLog.scrollHeight
+  return el
+}
+
+document.getElementById("vibe-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault()
+  const text = vibeBox.value.trim()
+  if (!text || vibeCtrl || !workspace) return
+  vibeBox.value = ""
+  vibeMessages.push({ role: "user", content: text })
+  vibeLine("who", "你")
+  vibeLine("", text)
+  const body = vibeLine("", "")
+  const note = vibeLine("tool", "")
+  vibeCtrl = new AbortController()
+  document.getElementById("vibe-send").disabled = true
+  try {
+    const r = await fetch("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      signal: vibeCtrl.signal,
+      body: JSON.stringify({
+        model: "token-rush", stream: true, code_tools: true, workspace,
+        messages: vibeMessages
+      })
+    })
+    if (!r.ok) throw new Error("请求失败")
+    const reader = r.body.getReader()
+    const dec = new TextDecoder()
+    let buf = ""
+    let answer = ""
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += dec.decode(value, { stream: true })
+      const parts = buf.split("\n\n")
+      buf = parts.pop()
+      for (const part of parts) {
+        const line = part.split("\n").filter(l => l.startsWith("data:")).pop()
+        if (!line) continue
+        const data = line.slice(5).trim()
+        if (data === "[DONE]") continue
+        const obj = JSON.parse(data)
+        if (obj.error) throw new Error(obj.error.message || "出错了")
+        const delta = obj.choices && obj.choices[0] && obj.choices[0].delta
+        if (delta && delta.content) { answer += delta.content; body.textContent = answer }
+        if (obj.tool_result) {
+          note.textContent = obj.tool_result.content.split("\n")[0]
+          if (obj.tool_result.name === "write_file") {
+            dirCache.clear()
+            await renderTree()
+            const written = obj.tool_result.path
+            if (openOrder.includes(written) && !isDirty(written)) {
+              const fr = await fetch("/fs/file?path=" + encodeURIComponent(written))
+              const fj = await fr.json().catch(() => ({}))
+              if (fr.ok) { saved.set(written, fj.content); putText(written, fj.content); renderTabs() }
+            }
+          }
+        }
+      }
+    }
+    if (answer) vibeMessages.push({ role: "assistant", content: answer })
+  } catch (e) {
+    if (e.name !== "AbortError") body.textContent = "出错了：" + e.message
+  } finally {
+    vibeCtrl = null
+    document.getElementById("vibe-send").disabled = false
+  }
+})
+vibeBox.addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); document.getElementById("vibe-form").requestSubmit() }
+})
 claimSeat().then(() => { if (seated) return loadCatalog().then(() => { if (catalog.length) return open(catalog[0].id) }) })
 fetch("/health").then(r => r.json()).then(h => {
   if (typeof h.top_p === "number") topP = h.top_p

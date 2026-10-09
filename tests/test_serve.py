@@ -163,7 +163,7 @@ def test_chat_page_and_saved_transcripts(tmp_path):
                                  served_name="token-rush", alias=[], chats=str(path))
     c = TestClient(build_app(Unused(), None, None, args))
     page = c.get("/")
-    assert page.status_code == 200 and "新对话" in page.text
+    assert page.status_code == 200 and "新对话" in page.text and "写代码" in page.text and 'id="ide"' in page.text and 'id="monaco"' in page.text and "打开目录" in page.text
     assert c.get("/chats").json() == []
     saved = c.put("/chats/abc", json={"title": "草稿", "messages": [{"role": "user", "content": "你好"}]}).json()
     assert saved["title"] == "草稿" and saved["messages"] == [{"role": "user", "content": "你好"}]
