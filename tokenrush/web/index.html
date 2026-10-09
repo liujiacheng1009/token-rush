@@ -99,6 +99,10 @@
     font-size: 13px; line-height: 1.45;
   }
   #code-chat header { flex: none; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 14px; color: #ccc; font-size: 13px; }
+  #code-folder {
+    margin-left: auto; min-width: 0; max-width: 58%; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; color: #8a8a8a; font-size: 11px;
+  }
   #code-status { color: #d6a15c; font-size: 12px; }
   #code-status:empty { display: none; }
   #code-status::before {
@@ -112,6 +116,9 @@
   #code-log .turn { margin: 0 0 16px; }
   #code-log .who { font-size: 11px; color: #8a8a8a; margin-bottom: 4px; }
   #code-log .text { white-space: pre-wrap; word-break: break-word; }
+  #code-log .turn.assistant .text { white-space: normal; }
+  #code-log .steps { color: #8a8a8a; font-size: 12px; margin-bottom: 6px; }
+  #code-log .steps:empty { display: none; }
   #code-log .turn.user { display: flex; flex-direction: column; align-items: flex-end; }
   #code-log .turn.user .bubble {
     max-width: 100%; background: #34362f; border-radius: 12px 12px 4px 12px; padding: 8px 10px; color: #f2f0e8;
@@ -389,7 +396,7 @@
     <iframe id="vscode-frame" title="VS Code"></iframe>
     <div id="code-split" title="拖动调整宽度"></div>
     <section id="code-chat">
-      <header>token-rush<span id="code-status"></span></header>
+      <header><span>token-rush</span><span id="code-status"></span><span id="code-folder"></span></header>
       <div id="code-log"><div class="empty">选中代码，右键「把选中代码加入 token-rush」。引用显示成 文件:行号。</div></div>
       <form id="code-form">
         <div id="code-chips"></div>
@@ -1259,7 +1266,7 @@ function showCode(on) {
   const frame = document.getElementById("vscode-frame")
   row.hidden = !on
   if (on && !frame.getAttribute("src")) {
-    frame.src = "/vscode/?folder=" + encodeURIComponent("/home/jesse/workspace/token-rush")
+    frame.src = "/vscode/"
   }
   document.getElementById("mode-chat").classList.toggle("on", !on)
   document.getElementById("mode-code").classList.toggle("on", on)
@@ -1701,15 +1708,37 @@ function codeLine(role, text, cites) {
     }
     bubble.append(pills)
   }
+  const steps = document.createElement("div")
+  steps.className = "steps"
+  if (role === "assistant") bubble.append(steps)
   const body = document.createElement("div")
-  body.className = "text"
-  body.textContent = text
+  body.className = role === "assistant" ? "text md" : "text"
+  if (role === "assistant" && text) renderRich(body, text)
+  else body.textContent = text
+  body._steps = steps
   bubble.append(body)
   el.append(bubble)
   codeLog.append(el)
   codeLog.scrollTop = codeLog.scrollHeight
   return body
 }
+function codeFolder() {
+  const frame = document.getElementById("vscode-frame")
+  try {
+    const href = frame.contentWindow && frame.contentWindow.location && frame.contentWindow.location.href
+    if (!href || href === "about:blank") return ""
+    return new URL(href).searchParams.get("folder") || ""
+  } catch (e) {
+    return ""
+  }
+}
+function showCodeFolder() {
+  const el = document.getElementById("code-folder")
+  const folder = codeFolder()
+  el.textContent = folder
+  el.title = folder
+}
+document.getElementById("vscode-frame").addEventListener("load", showCodeFolder)
 function codePrompt(text, cites) {
   if (!cites.length) return text
   const blocks = cites.map(c => c.label + "\n```\n" + c.text + "\n```").join("\n\n")
@@ -1732,23 +1761,48 @@ document.getElementById("code-form").addEventListener("submit", async (ev) => {
   send.disabled = true
   send.classList.add("busy")
   status.textContent = "正在回复"
+  const folder = codeFolder()
   try {
+    if (!folder) throw new Error("还没读到编辑器打开的目录")
     const r = await fetch("/v1/chat/completions", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        model: "token-rush", stream: true, temperature: 0.7,
+        model: "token-rush", stream: true, temperature: 0.7, code_tools: true, workspace: folder,
         messages: [
-          { role: "system", content: "你是这台机器上的 token-rush。用户附上的代码用 文件:行号 标出。回答用中文，引用代码时沿用同样的 文件:行号。" },
+          { role: "system", content: "你是这台机器上的 token-rush。当前编辑器打开的目录是 " + folder + "。用 list_dir、read_file、write_file 把任务做完，同一个路径不要重复调用，不要读 .git。材料够了就停止调用工具，用中文写出结果。不能执行 git；用户要提交时，写出要在终端里运行的命令。不要改成别的路径。用户附上的代码用 文件:行号 标出，引用代码时沿用同样的 文件:行号。" },
           ...codeMessages.slice(-16).map(m => ({ role: m.role, content: m.role === "user" ? codePrompt(m.content, m.cites || []) : m.content }))
         ]
       })
     })
-    if (!r.ok) throw new Error("请求失败")
+    if (!r.ok) throw new Error((await r.text()) || "请求失败")
     const reader = r.body.getReader()
     const dec = new TextDecoder()
     let buf = "", answer = ""
-    while (true) {
+    let shown = ""
+    const repeated = (text) => {
+      const parts = text.split(/(?<=。)/)
+      const seen = new Set()
+      const out = []
+      let dropped = false
+      for (const part of parts) {
+        const key = part.replace(/\s+/g, "")
+        if (key.length > 10 && seen.has(key)) { dropped = true; continue }
+        if (key.length > 10) seen.add(key)
+        out.push(part)
+      }
+      return dropped ? out.join("").trim() : ""
+    }
+    const paint = () => {
+      const cut = repeated(answer)
+      shown = cut || answer
+      body.replaceChildren()
+      if (shown) renderRich(body, shown)
+      codeLog.scrollTop = codeLog.scrollHeight
+      return !!cut
+    }
+    let stop = false
+    while (!stop) {
       const { done, value } = await reader.read()
       if (done) break
       buf += dec.decode(value, { stream: true })
@@ -1762,10 +1816,29 @@ document.getElementById("code-form").addEventListener("submit", async (ev) => {
         const obj = JSON.parse(data)
         if (obj.error) throw new Error(obj.error.message || "出错了")
         const delta = obj.choices && obj.choices[0] && obj.choices[0].delta
-        if (delta && delta.content) { answer += delta.content; body.textContent = answer }
+        if (delta && delta.content) {
+          answer += delta.content
+          status.textContent = "正在回复"
+          if (paint()) { stop = true; await reader.cancel(); break }
+        }
+        if (obj.tool_result) {
+          const path = obj.tool_result.path || ""
+          const base = path.split("/").filter(Boolean).pop() || path
+          const label = obj.tool_result.name === "list_dir" ? "列出 " + path : obj.tool_result.name === "write_file" ? "写入 " + base : "读取 " + base
+          const step = document.createElement("div")
+          step.textContent = label
+          body._steps.append(step)
+          status.textContent = label
+          answer = ""
+          codeLog.scrollTop = codeLog.scrollHeight
+        }
       }
     }
-    codeMessages.push({ role: "assistant", content: answer })
+    if (!shown) {
+      shown = body._steps.childElementCount ? "文件看过了，但没有写出回复。这边不能执行 git，提交要在终端里做。" : "没有收到文字"
+      body.textContent = shown
+    }
+    codeMessages.push({ role: "assistant", content: shown })
   } catch (e) {
     body.textContent = "没有发出去：" + e.message
   } finally {
@@ -1782,6 +1855,7 @@ codeBox.addEventListener("keydown", (ev) => {
 setInterval(async () => {
   if (document.getElementById("code-row").hidden) return
   try {
+    showCodeFolder()
     const r = await fetch("/ide/cites")
     if (!r.ok) return
     const data = await r.json()

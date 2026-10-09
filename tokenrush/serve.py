@@ -586,12 +586,13 @@ def build_app(session: Session, tok, cfg, args):
         thinking = want_thinking(body, "openai")
         page_token = getattr(req.state, "seat_token", None)
         tools = list(_CODE_TOOLS)
-        used = 0
+        seen = set()
         stops = body.get("stop") or []
         stops = [stops] if isinstance(stops, str) else list(stops)
         max_new = body.get("max_completion_tokens") or body.get("max_tokens") or args.max_new
-        guide = ("你在编辑服务器目录 " + root + "。用 list_dir、read_file、write_file 查看和修改其中的文件，"
-                 "path 用这个目录下的绝对路径。改完用一两句话说明改了什么。")
+        guide = ("你在编辑服务器目录 " + root + "。用 list_dir、read_file、write_file 完成任务，"
+                 "path 用这个目录下的绝对路径。同一个路径不要重复调用，不要读 .git。"
+                 "材料够了就做完，并用中文写出结果。")
         if msgs and msgs[0].get("role") == "system":
             msgs = [dict(msgs[0], content=((msgs[0].get("content") or "") + "\n\n" + guide).strip())] + [dict(m) for m in msgs[1:]]
         else:
@@ -630,14 +631,19 @@ def build_app(session: Session, tok, cfg, args):
                 yield ("done", done)
                 return
             executed = []
+            fresh = 0
             for call in calls:
-                if used >= _MAX_TOOL_CALLS:
-                    break
-                if call.name not in ("list_dir", "read_file", "write_file"):
+                args_ = call.arguments or {}
+                path = os.path.normpath(str(args_.get("path") or ""))
+                key = (call.name, path, str(args_.get("content") or "") if call.name == "write_file" else "")
+                in_git = ".git" in path.split(os.sep)
+                if in_git:
+                    result = "不要读 .git。根据项目里的文件把任务做完。"
+                elif key in seen:
+                    result = "已经看过 " + path + "。不要重复这个调用，根据已有内容把任务做完并写出回复。"
+                elif call.name not in ("list_dir", "read_file", "write_file"):
                     result = f"不会执行这个工具：{call.name}"
                 else:
-                    args_ = call.arguments or {}
-                    path = str(args_.get("path") or "")
                     try:
                         if call.name == "list_dir":
                             listed = list_dir(path)
@@ -652,7 +658,8 @@ def build_app(session: Session, tok, cfg, args):
                             result = "已写入 " + written
                     except FsError as exc:
                         result = str(exc)
-                used += 1
+                    fresh += 1
+                    seen.add(key)
                 executed.append((call, result))
                 if await req.is_disconnected():
                     return
@@ -662,7 +669,7 @@ def build_app(session: Session, tok, cfg, args):
                 msgs.append({"role": "tool", "content": result})
                 yield ("tool_result", {"name": call.name, "path": str((call.arguments or {}).get("path") or ""),
                                        "content": result})
-            if used >= _MAX_TOOL_CALLS:
+            if fresh == 0:
                 tools = []
 
     @app.post("/v1/chat/completions")
@@ -1081,6 +1088,7 @@ def build_app(session: Session, tok, cfg, args):
         skip = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
                 "trailers", "transfer-encoding", "upgrade", "content-length", "content-encoding"}
         headers = {k: v for k, v in req.headers.items() if k.lower() not in skip}
+        headers["accept-encoding"] = "identity"
         headers["x-forwarded-host"] = req.headers.get("host", "")
         headers["x-forwarded-proto"] = req.url.scheme or "http"
         client = httpx.AsyncClient(timeout=None)
@@ -1339,16 +1347,22 @@ def main():
     ap.add_argument("--chats", default=default_chats_path(), help="JSON file the web page saves conversations in")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--tls-cert", default="", help="PEM certificate; with --tls-key the page is HTTPS so the browser clipboard works")
+    ap.add_argument("--tls-key", default="", help="PEM private key for --tls-cert")
     ap.add_argument("--api-key", default=os.environ.get("TOKENRUSH_API_KEY"), help="require it as x-api-key / Bearer")
     ap.add_argument("--served-name", default="token-rush")
     ap.add_argument("--alias", action="append", default=[], help="extra model names to list")
     args = ap.parse_args()
     session, tok, cfg = load_session(args)
     print(f"web search: {backend_name()}", flush=True)
-    print(f"chat page http://{args.host}:{args.port}/", flush=True)
+    if bool(args.tls_cert) != bool(args.tls_key):
+        raise SystemExit("--tls-cert and --tls-key are set together")
+    scheme = "https" if args.tls_cert else "http"
+    print(f"chat page {scheme}://{args.host}:{args.port}/", flush=True)
     print(f"conversations {args.chats}", flush=True)
     import uvicorn
-    uvicorn.run(build_app(session, tok, cfg, args), host=args.host, port=args.port, log_level="warning")
+    tls = {"ssl_certfile": args.tls_cert, "ssl_keyfile": args.tls_key} if args.tls_cert else {}
+    uvicorn.run(build_app(session, tok, cfg, args), host=args.host, port=args.port, log_level="warning", **tls)
 
 
 if __name__ == "__main__":
