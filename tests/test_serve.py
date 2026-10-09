@@ -423,6 +423,17 @@ def test_second_browser_takes_the_seat_with_the_password(tmp_path):
     assert first.get("/chats").status_code == 401
 
 
+def test_loopback_login_shows_the_lan_address(tmp_path):
+    from fastapi.testclient import TestClient
+    from tokenrush.serve import build_app
+    args = types.SimpleNamespace(api_key=None, think="auto", temperature=0.7, top_p=0.9, max_new=512, draft="auto",
+                                 served_name="token-rush", alias=[], chats=str(tmp_path / "chats.json"))
+    app = build_app(types.SimpleNamespace(max_len=32768), None, None, args)
+    local = TestClient(app, client=("127.0.0.1", 50000))
+    ip = local.get("/session").json()["ip"]
+    assert ip and not ip.startswith("127.")
+
+
 def test_api_key_required_when_set():
     from fastapi.testclient import TestClient
     from tokenrush.serve import build_app

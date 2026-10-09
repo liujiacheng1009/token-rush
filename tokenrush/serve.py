@@ -19,6 +19,7 @@ import json
 import os
 import queue
 import secrets
+import socket
 import threading
 import time
 import uuid
@@ -30,9 +31,24 @@ from .chat import (OutputParser, StopFilter, from_anthropic, from_openai, render
 from .chats import ChatError, ChatStore, default_chats_path
 from .recall import asks_about_past, recall, shorten_tool
 from .search import backend_name, web_fetch, web_search
-from .session import Session
 
 _SEAT_PASSWORD = "bestcalib"
+
+
+def lan_ip() -> str:
+    """This machine's intranet address. A browser on 127.0.0.1 is still this host."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("192.0.2.1", 1))
+        ip = sock.getsockname()[0]
+    except OSError:
+        ip = ""
+    finally:
+        sock.close()
+    if not ip or ip.startswith("127."):
+        return ""
+    return ip
+from .session import Session
 
 _MAX_TOOL_CALLS = 8
 _MAX_FETCHES = 4
@@ -178,7 +194,12 @@ def build_app(session: Session, tok, cfg, args):
             raise HTTPException(401, "invalid api key")
 
     def client_ip(req: Request) -> str:
-        return req.client.host if req.client else ""
+        host = req.client.host if req.client else ""
+        if host.startswith("::ffff:"):
+            host = host.removeprefix("::ffff:")
+        if host in ("", "127.0.0.1", "::1", "localhost") or host.startswith("127."):
+            return lan_ip() or host
+        return host
 
     def seat_view(req: Request):
         token = req.cookies.get("tr_seat")
