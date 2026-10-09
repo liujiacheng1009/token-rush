@@ -1,6 +1,6 @@
 # 在这台 RTX 5090 上跑 Token Rush demo
 
-只覆盖两件事：一条命令出一段回复，以及把同一个引擎开成 OpenAI / Anthropic 兼容的本地服务。基准、量化、对手复现不在这里。
+只覆盖两件事：一条命令出一段回复，以及把同一个引擎开成 OpenAI / Anthropic 兼容的本地服务。速度和质量怎么在这台机器上再测，见 [benchmark.md](benchmark.md)。量化配方和对手复现不在这里。
 
 仓库根目录执行下面的命令。这台机器是本机 Ubuntu（内核 `7.0.0-34-generic`），不是 vast 容器。
 
