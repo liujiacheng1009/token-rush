@@ -409,16 +409,16 @@ def test_second_browser_takes_the_seat_with_the_password(tmp_path):
                                  served_name="token-rush", alias=[], chats=str(tmp_path / "chats.json"))
     app = build_app(types.SimpleNamespace(max_len=32768), None, None, args)
     first, second = TestClient(app), TestClient(app)
-    sat = first.get("/session")
+    sat = first.get("/seat")
     assert sat.status_code == 200 and sat.json()["ok"] is True
     ip = sat.json()["ip"]
-    blocked = second.get("/session")
+    blocked = second.get("/seat")
     assert blocked.status_code == 401 and blocked.json()["holder"] == ip
     assert second.post("/login", json={"password": "nope"}).status_code == 401
     assert second.get("/chats").status_code == 401
     taken = second.post("/login", json={"password": "bestcalib"})
     assert taken.status_code == 200 and taken.json()["ip"] == ip
-    assert first.get("/session").status_code == 401
+    assert first.get("/seat").status_code == 401
     assert second.get("/chats").status_code == 200
     assert first.get("/chats").status_code == 401
 
@@ -430,7 +430,7 @@ def test_loopback_login_shows_the_lan_address(tmp_path):
                                  served_name="token-rush", alias=[], chats=str(tmp_path / "chats.json"))
     app = build_app(types.SimpleNamespace(max_len=32768), None, None, args)
     local = TestClient(app, client=("127.0.0.1", 50000))
-    ip = local.get("/session").json()["ip"]
+    ip = local.get("/seat").json()["ip"]
     assert ip and not ip.startswith("127.")
 
 

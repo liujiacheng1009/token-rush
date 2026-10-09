@@ -303,7 +303,7 @@ def build_app(session: Session, tok, cfg, args):
     def home():
         return FileResponse(web)
 
-    @app.get("/session")
+    @app.get("/seat")
     def session_get(req: Request, response: Response):
         state, ip = seat_view(req)
         if state == "in":

@@ -717,7 +717,7 @@ function showGate(holder, kicked) {
 }
 
 async function claimSeat() {
-  const r = await fetch("/session")
+  const r = await fetch("/seat")
   const j = await r.json().catch(() => ({}))
   if (r.ok) showSeat(j.ip)
   else showGate(j.holder || "", false)
@@ -746,7 +746,7 @@ document.getElementById("gateform").addEventListener("submit", async (ev) => {
 
 setInterval(async () => {
   if (!seated) return
-  const r = await fetch("/session")
+  const r = await fetch("/seat")
   if (r.ok) return
   const j = await r.json().catch(() => ({}))
   halt(false)
