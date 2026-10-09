@@ -85,6 +85,17 @@ CUDA graph 把这一串启动录下来。录制时这段代码照常跑一遍，
 - **按实际长度做的 attention decode。** 16 层注意力要读已经生成的 KV。早期按 1k、2k、4k 分桶，短上下文也会把一整桶读完再用掩码丢掉。现在的 kernel 从 `pos_t` 知道活的长度，只扫 `0..pos`，网格仍然固定，所以还在同一张图里。decode 从 83 tok/s 到大约 100。
 - **验证步的 Marlin 类 int4 GEMM。** 普通 decode 是矩阵乘向量（1 行）。验证是同一份 int4 权重乘 M = K+1 行。原来的 GEMV 拿去乘 8 行，验 7 个草稿要 1.35 倍普通步的时间。Marlin 这类 kernel 把权重留在片上，连乘这几行，验 7 个降到 **1.13 倍**。原始 decode 只有 1 行，这套布局反而略慢（大约 98 tok/s，Triton 的 GEMV 是 101），所以它是为验证步准备的。
 
+四个名字是同一份 int4 的四种乘法，在 `QLinear` 里用 `--backend` 选。码的含义一样，都是 `码 × scale + mn`。差别是权重在显存里怎么摆、还原发生在寄存器里还是先写成整张 bf16 矩阵、一次调用能乘几行。
+
+| 后端 | 加载时权重怎么放 | 一次调用怎么乘 | 用在哪 |
+|---|---|---|---|
+| `marlin` | 重排成 16×16 的块，按 tensor core 那条 `mma` 指令要的 fragment 顺序；`scale` 和 `mn` 的列也按 64 一组置换。原来的「一字节两个码」可以解回来。输出维和输入维都要是 128 的倍数、group 也是 128，否则这一层退回 `triton` | 行数 T ≤ 16：一个 CUDA kernel，寄存器里把码还原成 bf16，再做 bf16 的 tensor core 乘加。T = 1 和 T = 16 走同一个 kernel。T > 16：整张还原成 bf16，交给 cuBLAS | 扩展编译成功时的默认。验证一次乘 4 到 8 行，验 7 个草稿是普通一步的 1.13 倍。只有 1 行的原始 decode 大约 98 tok/s |
+| `triton` | 保持打包格式：一个字节里低 4 位、高 4 位各一个码，旁边是每组的 `scale` 和 `mn` | T = 1：自己的 GEMV。内层用码乘 bf16 激活，一组 128 个数结束再乘 `scale`、加 `mn`，不把整张权重写成 bf16。2 ≤ T ≤ 8：按块还原成 bf16 再点积，到 T = 8 时比 Marlin 慢 15–20%。T > 8：整张还原后走 cuBLAS | `--backend triton`。原始 decode 大约 101 tok/s。用它的多行 kernel 验 7 个草稿是普通一步的 1.35 倍 |
+| `tinygemm` | 交给 PyTorch 的 `_convert_weight_to_int4pack`，布局不透明。半字节对调（它把高 4 位当成偶数位），零点写成 `mn + 8 × scale`，因为那个 kernel 按 `(q − 8) × scale + zero` 还原。原码不再留着，解不回来 | 任何长度都走 `aten._weight_int4pack_mm`，长 prefill 也是。T ≥ 512 时比「还原一次再 cuBLAS」慢大约 6 倍 | 对照后端 |
+| `dequant` | 保持和 `triton` 相同的打包格式 | 每次都把整张矩阵还原成 bf16，再 `F.linear`（cuBLAS）。读和写的字节远多于 4 bit 那一份 | 正确性对照。`triton` 在 T > 8、`marlin` 在 T > 16 时走的也是这条 |
+
+这四个是本引擎里的矩阵乘。vLLM 的仓库里也有 Triton kernel，并且带了上游 Marlin；这里的是按本仓库的非对称 g128、bf16 激活移植的那一版（`tokenrush/csrc/marlin_bf16.cu`）。llama.cpp 的矩阵乘在 ggml 自己的 CUDA kernel 里。
+
 int4 的矩阵乘向量本身没有多少可写的。同样形状的 bf16 GEMV，用 cuBLAS、放进一张图，已经跑到大约 1643 GB/s，是这堵墙的 96.6%。权重怎么摆、一次读多少，天花板在量化那一档已经定了；再手写一个 GEMV，也超不过「这些字节 ÷ 1701」。时间花在上面三处，不花在重写 M=1 的乘法。
 
 量化是天花板本身。bf16 的文本路径大约 54 GB，5090 的 32 GB 放不下，所以至少要压一遍才能加载。压到多瘦决定的是速度：decode 每步把权重量读一遍，字节越少 tok/s 越高。4.25 bit/weight 大约 14 GB，空上下文的带宽上限大约 119 tok/s，同时 256k 的 FP8 KV（约 8 GB）还放得下。FP8 权重大约 27 GB，短上下文能加载，上限大约 63 tok/s，再加满 256k 的 KV 就超了 32 GB。超过 119 这条墙的唯一办法是一步吐出多于一个 token，也就是投机解码。
