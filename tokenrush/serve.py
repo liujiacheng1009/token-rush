@@ -31,8 +31,8 @@ from .recall import asks_about_past, recall, shorten_tool
 from .search import backend_name, web_fetch, web_search
 from .session import Session
 
-_MAX_TOOL_CALLS = 3
-_MAX_FETCHES = 2
+_MAX_TOOL_CALLS = 8
+_MAX_FETCHES = 4
 _SEARCH_GUIDE = (
     "需要时效、或你没有把握的事实时，调用 web_search。需要某条结果的正文时，调用 web_fetch，参数是搜索结果里的 https URL。"
     "只引用工具结果里出现过的 URL。搜索没有结果、超时或抓取失败时，直接说没查到，不要编造数字或链接。"
@@ -369,6 +369,7 @@ def build_app(session: Session, tok, cfg, args):
         tools = list(_SERVER_TOOLS)
         fetches = 0
         used = 0
+        nudged = False
         stops = body.get("stop") or []
         stops = [stops] if isinstance(stops, str) else list(stops)
         max_new = body.get("max_completion_tokens") or body.get("max_tokens") or args.max_new
@@ -399,8 +400,16 @@ def build_app(session: Session, tok, cfg, args):
             if done is None:
                 return
             if not calls or not tools:
-                if calls and not ("".join(texts).strip()):
-                    yield ("text", "已达到本轮搜索次数上限。")
+                # Tools are gone and the model still only emitted a call. One more
+                # turn, with the results already in the prompt, has to answer the
+                # question instead of stopping on the cap sentence.
+                if calls and not ("".join(texts).strip()) and not nudged:
+                    nudged = True
+                    tools = []
+                    msgs.append({"role": "assistant", "content": "".join(texts),
+                                 "tool_calls": [{"name": c.name, "arguments": c.arguments} for c in calls]})
+                    msgs.append({"role": "user", "content": "不要再调用工具。根据已经拿到的结果直接回答上面的问题。不够就说明没查到，不要罗列链接。"})
+                    continue
                 yield ("done", done)
                 return
             executed = []
@@ -418,7 +427,7 @@ def build_app(session: Session, tok, cfg, args):
                     result, sources = recall(store, query, chat_id, client_msgs), []
                 elif call.name == "web_fetch" and fetches >= _MAX_FETCHES:
                     yield ("search", {"tool": call.name, "query": query})
-                    result, sources = "本轮最多打开 2 个页面。", []
+                    result, sources = f"本轮最多打开 {_MAX_FETCHES} 个页面。", []
                 elif call.name == "web_search":
                     yield ("search", {"tool": call.name, "query": query})
                     result, sources = await asyncio.to_thread(web_search, query)

@@ -17,9 +17,11 @@ from html.parser import HTMLParser
 
 _MAX_HITS = 5
 _FETCH_BYTES = 1_000_000
-_FETCH_CHARS = 4000
+_FETCH_CHARS = 16000
 _TIMEOUT = 8
-_SKIP_TAGS = {"script", "style", "noscript", "nav", "footer", "header", "svg"}
+_SKIP_TAGS = {"script", "style", "noscript", "nav", "footer", "header", "svg", "aside"}
+_SKIP_CLASS = {"katex-html", "theme-doc-toc-mobile", "theme-doc-toc-desktop", "pagination-nav", "navbar", "breadcrumbs", "table-of-contents"}
+_BLOCK = {"p", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "blockquote"}
 
 
 def backend_name() -> str:
@@ -68,8 +70,7 @@ def web_fetch(url: str):
     else:
         text = body.decode("utf-8", "replace")
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
-    if len(text) > _FETCH_CHARS:
-        text = text[:_FETCH_CHARS] + "\n…（已截断）"
+    text = _trim_text(text)
     if not text:
         return "页面没有可读正文。", [{"title": final, "url": final}]
     return text, [{"title": final, "url": final}]
@@ -178,28 +179,99 @@ def _get(url: str, headers=None, limit=_FETCH_BYTES):
     raise RuntimeError("重定向次数过多")
 
 
+def _trim_text(text: str) -> str:
+    """Keep a docs page, and if it still overruns, stop on a paragraph."""
+    if len(text) <= _FETCH_CHARS:
+        return text
+    cut = text.rfind("\n\n", _FETCH_CHARS // 2, _FETCH_CHARS)
+    if cut < 0:
+        cut = _FETCH_CHARS
+    rest = len(text) - cut
+    return text[:cut].rstrip() + f"\n\n…（已截断，后面还有 {rest} 字）"
+
+
 class _VisibleText(HTMLParser):
+    """Readable text. Prefer <article>, then <main>. One TeX annotation per formula, not the rendered duplicate."""
+
     def __init__(self):
         super().__init__(convert_charrefs=True)
-        self._skip = 0
-        self.parts = []
+        self._stack = []
+        self._article = 0
+        self._main = 0
+        self.article, self.main, self.body = [], [], []
 
     def handle_starttag(self, tag, attrs):
-        if tag in _SKIP_TAGS:
-            self._skip += 1
+        cls = ""
+        for key, value in attrs:
+            if key == "class" and value:
+                cls = value
+        tokens = set(cls.split())
+        kind = "ok"
+        if tag in _SKIP_TAGS or tokens & _SKIP_CLASS:
+            kind = "skip"
+        elif "katex-mathml" in tokens:
+            kind = "mathml"
+        elif "katex-display" in tokens:
+            kind = "display"
+        elif tag == "annotation" and any(frame["kind"] == "mathml" for frame in self._stack):
+            kind = "ann"
+            self._emit("\n$$\n" if any(frame["kind"] == "display" for frame in self._stack) else "$")
+        if tag == "article":
+            self._article += 1
+        elif tag == "main":
+            self._main += 1
+        elif tag == "br" and kind != "skip" and not any(frame["kind"] == "skip" for frame in self._stack):
+            self._emit("\n")
+        elif tag in ("td", "th") and kind != "skip" and not any(frame["kind"] == "skip" for frame in self._stack):
+            self._emit(" | ")
+        self._stack.append({"tag": tag, "kind": kind})
+
+    def handle_startendtag(self, tag, attrs):
+        if tag == "br":
+            self._emit("\n")
 
     def handle_endtag(self, tag):
-        if tag in _SKIP_TAGS and self._skip:
-            self._skip -= 1
-        if tag in ("p", "div", "br", "li", "tr", "h1", "h2", "h3"):
-            self.parts.append("\n")
+        while self._stack:
+            frame = self._stack.pop()
+            if frame["kind"] == "ann":
+                display = any(item["kind"] == "display" for item in self._stack)
+                self._emit("\n$$\n" if display else "$")
+            if frame["tag"] == "article" and self._article:
+                self._article -= 1
+            elif frame["tag"] == "main" and self._main:
+                self._main -= 1
+            if frame["kind"] != "skip" and frame["tag"] in _BLOCK and not any(item["kind"] == "skip" for item in self._stack):
+                self._emit("\n")
+            if frame["tag"] == tag:
+                break
 
     def handle_data(self, data):
-        if not self._skip:
-            self.parts.append(data)
+        kinds = [frame["kind"] for frame in self._stack]
+        if "skip" in kinds or not data:
+            return
+        if "mathml" in kinds and "ann" not in kinds:
+            return
+        self._emit(data)
+
+    def _emit(self, data):
+        self.body.append(data)
+        if self._main:
+            self.main.append(data)
+        if self._article:
+            self.article.append(data)
+
+    def text(self) -> str:
+        article = "".join(self.article).strip()
+        main = "".join(self.main).strip()
+        body = "".join(self.body).strip()
+        if len(article) >= 200 and (not main or len(article) >= len(main) // 2):
+            return article
+        if len(main) >= 200:
+            return main
+        return body or article or main
 
 
 def _html_text(body: bytes) -> str:
     parser = _VisibleText()
     parser.feed(body.decode("utf-8", "replace"))
-    return "".join(parser.parts)
+    return parser.text()

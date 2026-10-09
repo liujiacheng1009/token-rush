@@ -14,7 +14,7 @@ flowchart TD
   flag -->|否，含 Claude Code| once[现有的一次生成]
   once --> nomem[不翻其它对话]
   flag -->|是| scope[上下文只有本段消息，不读其它对话]
-  scope --> loop[工具循环，与搜索共用，最多 3 次]
+  scope --> loop[工具循环，与搜索共用，最多 8 次]
 
   loop --> gen[worker：模板、解码、解析 tool_call]
   gen --> kind{这一步停在哪?}

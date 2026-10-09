@@ -374,6 +374,34 @@ def test_fold_shortens_the_prompt_and_leaves_the_file(tmp_path):
     assert sess.prompts and "收成一段摘要" not in tok.decode(sess.prompts[0][0])
 
 
+def test_search_cap_still_answers_the_question(monkeypatch):
+    from fastapi.testclient import TestClient
+    from tokenrush.serve import build_app
+    tok = _tok()
+    tool = ("<tool_call>\n<function=web_search>\n<parameter=query>\naria fisheye62\n</parameter>\n"
+            "</function>\n</tool_call>")
+    sess = StubSession(tok, tool)
+
+    def generate(ids, max_new, mode, temperature, top_p, top_k, seed):
+        sess.prompts.append((list(ids),))
+        text = tok.decode(ids)
+        reply = "Aria 的文档没有要求用 fisheye62。" if "不要再调用工具" in text else tool
+        toks = tok.encode(reply, add_special_tokens=False) + [tok.convert_tokens_to_ids("<|im_end|>")]
+        for i in range(0, len(toks), 3):
+            yield toks[i:i + 3]
+
+    sess.generate = generate
+    monkeypatch.setattr("tokenrush.serve.web_search",
+                        lambda q: ("1. Aria\nhttps://example.com/aria\ndocs", [{"title": "Aria", "url": "https://example.com/aria"}]))
+    args = types.SimpleNamespace(api_key=None, think="auto", temperature=0.7, top_p=0.9, max_new=512, draft="auto",
+                                 served_name="token-rush", alias=[], chats=None)
+    c = TestClient(build_app(sess, tok, types.SimpleNamespace(eos_ids=(tok.eos_token_id,)), args))
+    r = c.post("/v1/chat/completions", json={"model": "m", "server_tools": True,
+                                            "messages": [{"role": "user", "content": "那不应该用fisheye62吗"}]}).json()
+    assert r["choices"][0]["message"]["content"] == "Aria 的文档没有要求用 fisheye62。"
+    assert "已达到本轮搜索次数上限" not in r["choices"][0]["message"]["content"]
+
+
 def test_api_key_required_when_set():
     from fastapi.testclient import TestClient
     from tokenrush.serve import build_app
