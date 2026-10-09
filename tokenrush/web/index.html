@@ -17,9 +17,10 @@
     --danger: #c46b55;
   }
   * { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; }
+  html, body { height: 100%; margin: 0; overflow: hidden; }
   body {
     display: flex;
+    min-height: 0;
     background: var(--bg);
     color: var(--text);
     font: 16px/1.5 "Iowan Old Style", Palatino, "Songti SC", serif;
@@ -67,21 +68,97 @@
   .chat.on { background: var(--user); }
   .chat span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chat .x { border: 0; padding: 0 4px; color: var(--muted); }
-  main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
   #log {
     flex: 1;
+    min-height: 0;
     overflow: auto;
     padding: 28px 8vw 12px;
     display: flex;
     flex-direction: column;
     gap: 14px;
   }
-  .bubble { max-width: 720px; white-space: pre-wrap; word-break: break-word; }
-  .bubble.user { align-self: flex-end; background: var(--user); border-radius: 12px; padding: 10px 14px; }
-  .bubble.assistant { align-self: flex-start; }
-  .think, .status { color: var(--muted); font-size: 14px; margin-bottom: 6px; }
-  .sources { margin-top: 8px; display: flex; flex-direction: column; gap: 2px; }
-  .sources a { color: var(--accent); font-size: 14px; word-break: break-all; }
+  .composer { flex: none; }
+  .bubble { max-width: min(760px, 100%); word-break: break-word; }
+  .bubble.user {
+    align-self: flex-end;
+    background: var(--user);
+    border-radius: 12px;
+    padding: 10px 14px;
+    white-space: pre-wrap;
+  }
+  .bubble.assistant {
+    align-self: flex-start;
+    max-width: min(920px, 100%);
+    font-family: "Noto Sans CJK SC", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+    white-space: normal;
+  }
+  .think, .status { color: var(--muted); font-size: 14px; margin-bottom: 6px; white-space: pre-wrap; }
+  .banner { color: var(--muted); font-size: 14px; white-space: pre-wrap; border-left: 2px solid var(--accent); padding-left: 10px; }
+  .status.wait::after {
+    content: "";
+    animation: waitdots 1.2s steps(4, end) infinite;
+  }
+  @keyframes waitdots {
+    0% { content: ""; }
+    25% { content: "."; }
+    50% { content: ".."; }
+    75% { content: "..."; }
+  }
+  details.searches { margin-top: 8px; }
+  details.searches summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+  details.searches .hit { margin: 6px 0 0 12px; }
+  details.searches .q { color: var(--muted); font-size: 13px; }
+  details.searches a { color: var(--accent); font-size: 14px; display: block; margin-top: 2px; }
+  .md :is(h1, h2, h3, h4) { font-weight: 650; line-height: 1.35; margin: 1.15em 0 0.4em; }
+  .md h1 { font-size: 1.28em; }
+  .md h2 { font-size: 1.14em; }
+  .md h3 { font-size: 1.05em; }
+  .md h4 { font-size: 1em; }
+  .md :is(h1, h2, h3, h4):first-child { margin-top: 0; }
+  .md p { margin: 0.55em 0; }
+  .md p:first-child { margin-top: 0; }
+  .md p:last-child { margin-bottom: 0; }
+  .md ul, .md ol { margin: 0.4em 0; padding-left: 1.35em; }
+  .md li { margin: 0.15em 0; }
+  .md blockquote { margin: 0.6em 0; padding: 2px 0 2px 12px; border-left: 2px solid var(--line); color: var(--muted); }
+  .md hr { border: 0; border-top: 1px solid var(--line); margin: 1em 0; }
+  .md a { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
+  .md a:hover { text-decoration: underline; }
+  .md code, pre code {
+    font-family: "Noto Sans Mono CJK SC", ui-monospace, "Sarasa Mono SC", monospace;
+  }
+  .md code {
+    font-size: 0.88em;
+    background: #1c211b;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 0 5px;
+  }
+  pre {
+    font-family: "Noto Sans Mono CJK SC", ui-monospace, "Sarasa Mono SC", monospace;
+    background: #0e100d;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 12px;
+    overflow: auto;
+    font-size: 13.5px;
+    line-height: 1.5;
+    margin: 0.7em 0;
+    white-space: pre;
+  }
+  pre .lang { color: var(--muted); font-size: 12px; margin-bottom: 6px; font-family: "Noto Sans CJK SC", sans-serif; }
+  pre code { background: none; border: 0; padding: 0; font-size: 13.5px; }
+  .table-wrap { overflow-x: auto; margin: 0.7em 0 1em; }
+  .md table { border-collapse: collapse; width: max-content; max-width: 100%; font-size: 14.5px; line-height: 1.45; }
+  .md th, .md td { border: 1px solid var(--line); padding: 7px 12px; vertical-align: top; }
+  .md th { background: #1c211b; font-weight: 650; text-align: left; }
+  .md tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.03); }
+  .math, .math-block { font-family: ui-monospace, monospace; }
+  .math-block { display: block; margin: 0.7em 0; overflow-x: auto; }
+  img.fig { max-width: min(100%, 480px); max-height: 320px; border-radius: 8px; display: block; margin: 8px 0; }
   .empty { color: var(--muted); margin: auto; }
   .row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; color: var(--muted); font-size: 14px; }
   .row label { display: flex; align-items: center; gap: 6px; }
@@ -95,8 +172,7 @@
     border-radius: 10px;
     padding: 10px 12px;
   }
-  .actions { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
-  #warn { color: var(--danger); font-size: 13px; min-height: 1.2em; }
+  .actions { display: flex; justify-content: flex-end; align-items: center; margin-top: 8px; }
   #sendstop { display: flex; gap: 8px; }
 </style>
 </head>
@@ -115,7 +191,6 @@
     </div>
     <textarea id="box" rows="2" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
     <div class="actions">
-      <div id="warn"></div>
       <div id="sendstop">
         <button id="stop" type="button" disabled>停止</button>
         <button id="send" class="primary" type="submit">发送</button>
@@ -127,14 +202,12 @@
 const log = document.getElementById("log")
 const list = document.getElementById("list")
 const box = document.getElementById("box")
-const warn = document.getElementById("warn")
 const sendBtn = document.getElementById("send")
 const stopBtn = document.getElementById("stop")
 const temp = document.getElementById("temp")
 const tempv = document.getElementById("tempv")
 const think = document.getElementById("think")
 
-let context = 32768
 let topP = 0.9
 let catalog = []
 let current = null
@@ -153,28 +226,53 @@ temp.addEventListener("input", () => {
 })
 think.addEventListener("change", () => localStorage.setItem("tokenrush.think", think.checked ? "1" : "0"))
 
-function estimate() {
-  let n = box.value.length
-  for (const m of messages) n += (m.content || "").length
-  n += live.content.length + live.reasoning.length
-  return Math.ceil(n / 2)
-}
-
-function refreshWarn() {
-  const tokens = estimate()
-  warn.textContent = tokens > context * 0.8 ? `大约 ${tokens} 个 token，接近 ${context} 的窗口。开一段新对话。` : ""
-}
-
-function urlsSinceUser(i) {
-  const found = []
+function searchItems(i) {
+  const items = []
   for (let j = i - 1; j >= 0; j--) {
-    if (messages[j].role === "user") break
-    if (messages[j].role !== "tool") continue
-    for (const u of (messages[j].content.match(/https:\/\/[^\s<>)\]]+/g) || [])) {
-      if (!found.includes(u)) found.push(u)
+    const m = messages[j]
+    if (m.role === "user") break
+    if (m.role !== "tool") continue
+    let query = ""
+    for (let k = j - 1; k >= 0 && messages[k].role !== "user"; k--) {
+      const calls = messages[k].tool_calls || []
+      const call = calls.find(c => c.id && c.id === m.tool_call_id) || calls[0]
+      if (messages[k].role === "assistant" && call && call.function) {
+        try {
+          const args = JSON.parse(call.function.arguments || "{}")
+          query = args.query || args.url || ""
+        } catch (e) {
+          query = ""
+        }
+        break
+      }
     }
+    const links = (m.sources && m.sources.length) ? m.sources.slice(0, 5) : firstLinks(m.content)
+    items.push({ name: m.name || "", query, links })
   }
-  return found
+  return items.reverse()
+}
+
+function firstLinks(content) {
+  const out = []
+  for (const u of ((content || "").match(/https:\/\/[^\s<>)\]]+/g) || [])) {
+    if (out.some(x => x.url === u)) continue
+    out.push({ title: u.replace(/^https:\/\//, "").slice(0, 48), url: u })
+    if (out.length >= 5) break
+  }
+  return out
+}
+
+function isFinalAnswer(i) {
+  for (let j = i + 1; j < messages.length; j++) {
+    if (messages[j].role === "user") break
+    if (messages[j].role === "assistant" && (messages[j].content || messages[j].reasoning)) return false
+  }
+  return true
+}
+
+function stripUrlWall(text) {
+  const kept = (text || "").split("\n").filter(line => !/^https?:\/\/\S+$/.test(line.trim()))
+  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim()
 }
 
 function renderLog() {
@@ -185,17 +283,18 @@ function renderLog() {
     e.className = "empty"
     e.textContent = "开始一段对话"
     log.append(e)
-    refreshWarn()
     return
   }
   messages.forEach((m, i) => {
     if (m.role === "tool") return
     if (m.role === "assistant" && !m.content && !m.reasoning) return
-    appendBubble(m.role, m.content, m.reasoning, m.role === "assistant" ? urlsSinceUser(i) : [], "")
+    appendBubble(m.role, m.content, m.reasoning, m.role === "assistant" && isFinalAnswer(i) ? searchItems(i) : [], "")
   })
-  if (busy) appendBubble("assistant", live.content, live.reasoning, urlsSinceUser(messages.length), live.query)
+  if (busy) {
+    const waiting = !live.content && !live.reasoning && !live.query
+    appendBubble("assistant", live.content, live.reasoning, searchItems(messages.length), waiting ? "思考中" : live.query)
+  }
   log.scrollTop = log.scrollHeight
-  refreshWarn()
 }
 
 function appendBubble(role, content, reasoning, urls, status) {
@@ -203,7 +302,7 @@ function appendBubble(role, content, reasoning, urls, status) {
   el.className = "bubble " + (role === "user" ? "user" : "assistant")
   if (status) {
     const s = document.createElement("div")
-    s.className = "status"
+    s.className = "status" + (status === "思考中" ? " wait" : "")
     s.textContent = status
     el.append(s)
   }
@@ -214,22 +313,282 @@ function appendBubble(role, content, reasoning, urls, status) {
     el.append(t)
   }
   const body = document.createElement("div")
-  body.textContent = content || ""
+  if (role === "user") body.textContent = content || ""
+  else {
+    body.className = "md"
+    renderRich(body, stripUrlWall(content || ""))
+  }
   el.append(body)
-  if (urls && urls.length) {
-    const box = document.createElement("div")
-    box.className = "sources"
-    for (const u of urls) {
+  if (urls && urls.length) el.append(searchBox(urls))
+  log.append(el)
+}
+
+function searchBox(items) {
+  const box = document.createElement("details")
+  box.className = "searches"
+  const summary = document.createElement("summary")
+  summary.textContent = "搜索 " + items.length + " 次"
+  box.append(summary)
+  for (const item of items) {
+    const hit = document.createElement("div")
+    hit.className = "hit"
+    if (item.query) {
+      const q = document.createElement("div")
+      q.className = "q"
+      q.textContent = (item.name === "web_fetch" ? "打开 " : item.name === "recall" ? "查找 " : "搜索 ") + item.query
+      hit.append(q)
+    }
+    for (const link of item.links || []) {
       const a = document.createElement("a")
-      a.href = u
+      a.href = link.url
       a.target = "_blank"
       a.rel = "noopener"
-      a.textContent = u
-      box.append(a)
+      a.textContent = link.title || link.url
+      hit.append(a)
     }
-    el.append(box)
+    box.append(hit)
   }
-  log.append(el)
+  return box
+}
+
+function renderRich(parent, text) {
+  const lines = text.replace(/\r\n/g, "\n").split("\n")
+  let i = 0
+  while (i < lines.length) {
+    const line = lines[i]
+    if (!line.trim()) { i++; continue }
+    if (line.startsWith("```")) {
+      const lang = line.slice(3).trim()
+      const buf = []
+      i++
+      while (i < lines.length && !lines[i].startsWith("```")) { buf.push(lines[i]); i++ }
+      if (i < lines.length && lines[i].startsWith("```")) i++
+      appendFence(parent, lang, buf.join("\n"))
+      continue
+    }
+    const heading = line.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/)
+    if (heading) {
+      const h = document.createElement("h" + Math.min(heading[1].length, 4))
+      renderInline(h, heading[2])
+      parent.append(h)
+      i++
+      continue
+    }
+    if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      parent.append(document.createElement("hr"))
+      i++
+      continue
+    }
+    if (line.trim() === "$$" || line.trim() === "\\[") {
+      const end = line.trim() === "$$" ? "$$" : "\\]"
+      const buf = []
+      i++
+      while (i < lines.length && lines[i].trim() !== end) { buf.push(lines[i]); i++ }
+      if (i < lines.length) i++
+      appendMath(parent, buf.join("\n").trim(), true)
+      continue
+    }
+    const disp = line.match(/^\$\$([\s\S]+?)\$\$$/) || line.match(/^\\\[([\s\S]+?)\\\]$/)
+    if (disp) { appendMath(parent, disp[1].trim(), true); i++; continue }
+    if (isTableStart(lines, i)) { i = appendTable(parent, lines, i); continue }
+    if (/^\s*([-*+]|\d+[.)])\s+/.test(line)) { i = appendList(parent, lines, i); continue }
+    if (/^\s*>\s?/.test(line)) { i = appendQuote(parent, lines, i); continue }
+    const buf = [line]
+    i++
+    while (i < lines.length && lines[i].trim() && !startsBlock(lines, i)) { buf.push(lines[i]); i++ }
+    const p = document.createElement("p")
+    buf.forEach((ln, k) => {
+      if (k) p.append(document.createElement("br"))
+      renderInline(p, ln)
+    })
+    parent.append(p)
+  }
+}
+
+function startsBlock(lines, i) {
+  const line = lines[i]
+  if (line.startsWith("```")) return true
+  if (/^#{1,6}\s+/.test(line)) return true
+  if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) return true
+  if (line.trim() === "$$" || line.trim() === "\\[") return true
+  if (/^\$\$[\s\S]+\$\$$/.test(line) || /^\\\[[\s\S]+\\\]$/.test(line)) return true
+  if (isTableStart(lines, i)) return true
+  if (/^\s*([-*+]|\d+[.)])\s+/.test(line)) return true
+  if (/^\s*>\s?/.test(line)) return true
+  return false
+}
+
+function splitRow(line) {
+  let s = line.trim()
+  if (s.startsWith("|")) s = s.slice(1)
+  if (s.endsWith("|")) s = s.slice(0, -1)
+  return s.split("|").map(c => c.trim())
+}
+
+function isSep(line) {
+  const cells = splitRow(line)
+  return cells.length > 1 && cells.every(c => /^:?-{3,}:?$/.test(c))
+}
+
+function isTableStart(lines, i) {
+  return i + 1 < lines.length && lines[i].includes("|") && splitRow(lines[i]).length > 1 && isSep(lines[i + 1])
+}
+
+function appendTable(parent, lines, i) {
+  const head = splitRow(lines[i])
+  const align = splitRow(lines[i + 1]).map(c => c.startsWith(":") && c.endsWith(":") ? "center" : c.endsWith(":") ? "right" : "left")
+  i += 2
+  const wrap = document.createElement("div")
+  wrap.className = "table-wrap"
+  const table = document.createElement("table")
+  const thead = document.createElement("thead")
+  const hr = document.createElement("tr")
+  head.forEach((cell, idx) => {
+    const th = document.createElement("th")
+    if (align[idx]) th.style.textAlign = align[idx]
+    renderInline(th, cell)
+    hr.append(th)
+  })
+  thead.append(hr)
+  table.append(thead)
+  const tb = document.createElement("tbody")
+  while (i < lines.length && lines[i].trim() && lines[i].includes("|") && !isSep(lines[i])) {
+    const row = splitRow(lines[i])
+    const tr = document.createElement("tr")
+    for (let c = 0; c < Math.max(head.length, row.length); c++) {
+      const td = document.createElement("td")
+      if (align[c]) td.style.textAlign = align[c]
+      renderInline(td, row[c] || "")
+      tr.append(td)
+    }
+    tb.append(tr)
+    i++
+  }
+  table.append(tb)
+  wrap.append(table)
+  parent.append(wrap)
+  return i
+}
+
+function appendList(parent, lines, i) {
+  const ordered = /^\s*\d+[.)]\s+/.test(lines[i])
+  const list = document.createElement(ordered ? "ol" : "ul")
+  if (ordered) {
+    const n = lines[i].match(/^\s*(\d+)/)
+    if (n && n[1] !== "1") list.start = Number(n[1])
+  }
+  while (i < lines.length && /^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) {
+    const same = ordered ? /^\s*\d+[.)]\s+/.test(lines[i]) : /^\s*[-*+]\s+/.test(lines[i])
+    if (!same) break
+    const li = document.createElement("li")
+    renderInline(li, lines[i].replace(/^\s*([-*+]|\d+[.)])\s+/, ""))
+    list.append(li)
+    i++
+  }
+  parent.append(list)
+  return i
+}
+
+function appendQuote(parent, lines, i) {
+  const q = document.createElement("blockquote")
+  const buf = []
+  while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+    buf.push(lines[i].replace(/^\s*>\s?/, ""))
+    i++
+  }
+  buf.forEach((ln, k) => {
+    if (k) q.append(document.createElement("br"))
+    renderInline(q, ln)
+  })
+  parent.append(q)
+  return i
+}
+
+function appendFence(parent, lang, code) {
+  const pre = document.createElement("pre")
+  if (lang) {
+    const lab = document.createElement("div")
+    lab.className = "lang"
+    lab.textContent = lang
+    pre.append(lab)
+  }
+  const node = document.createElement("code")
+  node.textContent = code.replace(/\n$/, "")
+  pre.append(node)
+  parent.append(pre)
+}
+
+function renderInline(parent, text) {
+  const re = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\((.+?)\\\)|\$([^$\n]*[\\^_{}][^$\n]*)\$|!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|`([^`\n]+)`|\*\*([^*\n]+)\*\*|(?<!\*)\*([^*\n]+)\*(?!\*)|(https?:\/\/[^\s<>)\]]+)/g
+  let last = 0
+  let m
+  while ((m = re.exec(text))) {
+    if (m.index > last) parent.append(document.createTextNode(text.slice(last, m.index)))
+    if (m[1] != null || m[2] != null) appendMath(parent, (m[1] || m[2]).trim(), true)
+    else if (m[3] != null) appendMath(parent, m[3].trim(), false)
+    else if (m[4] != null) appendMath(parent, m[4].trim(), false)
+    else if (m[6]) {
+      const img = document.createElement("img")
+      img.className = "fig"
+      img.alt = m[5] || ""
+      img.src = m[6]
+      parent.append(img)
+    } else if (m[8]) parent.append(linkNode(m[7], m[8]))
+    else if (m[9] != null) {
+      const code = document.createElement("code")
+      code.textContent = m[9]
+      parent.append(code)
+    } else if (m[10] != null) {
+      const strong = document.createElement("strong")
+      strong.textContent = m[10]
+      parent.append(strong)
+    } else if (m[11] != null) {
+      const em = document.createElement("em")
+      em.textContent = m[11]
+      parent.append(em)
+    } else if (m[12]) {
+      let url = m[12]
+      let tail = ""
+      const cut = url.match(/^(.*?)([.,;:!?，。、）】》]+)$/)
+      if (cut) { url = cut[1]; tail = cut[2] }
+      parent.append(linkNode(url.replace(/^https?:\/\//, ""), url))
+      if (tail) parent.append(document.createTextNode(tail))
+    }
+    last = m.index + m[0].length
+  }
+  if (last < text.length) parent.append(document.createTextNode(text.slice(last)))
+}
+
+function linkNode(label, url) {
+  const a = document.createElement("a")
+  a.href = url
+  a.target = "_blank"
+  a.rel = "noopener"
+  a.textContent = label
+  return a
+}
+
+function appendMath(parent, tex, display) {
+  const el = document.createElement("span")
+  el.className = display ? "math-block" : "math"
+  if (window.katex) {
+    try { katex.render(tex, el, { throwOnError: false, displayMode: display }) }
+    catch (e) { el.textContent = tex }
+  } else el.textContent = tex
+  parent.append(el)
+}
+
+function loadKatex() {
+  if (window.katex || document.getElementById("katex-css")) return
+  const css = document.createElement("link")
+  css.id = "katex-css"
+  css.rel = "stylesheet"
+  css.href = "https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css"
+  document.head.append(css)
+  const s = document.createElement("script")
+  s.src = "https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js"
+  s.onload = () => renderLog()
+  document.head.append(s)
 }
 
 function wireMessage(m) {
@@ -237,6 +596,7 @@ function wireMessage(m) {
   if (m.tool_calls) o.tool_calls = m.tool_calls
   if (m.name) o.name = m.name
   if (m.tool_call_id) o.tool_call_id = m.tool_call_id
+  if (m.sources) o.sources = m.sources
   return o
 }
 
@@ -314,7 +674,7 @@ async function save() {
   const r = await fetch("/chats/" + current.id, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ title: current.title, created: current.created, messages: current.messages })
+    body: JSON.stringify({ title: current.title, created: current.created, messages: current.messages, fold: current.fold || null })
   })
   if (!r.ok) throw new Error(await r.text())
   current = await r.json()
@@ -323,7 +683,6 @@ async function save() {
 
 document.getElementById("new").addEventListener("click", () => { halt(false); blank() })
 
-box.addEventListener("input", refreshWarn)
 box.addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" && !ev.shiftKey) {
     ev.preventDefault()
@@ -355,6 +714,8 @@ document.getElementById("form").addEventListener("submit", async (ev) => {
         top_p: topP,
         stream: true,
         server_tools: true,
+        chat_id: current && current.id,
+        fold: current && current.fold,
         messages: messages.map(wireMessage),
         chat_template_kwargs: { enable_thinking: think.checked }
       })
@@ -376,8 +737,17 @@ document.getElementById("form").addEventListener("submit", async (ev) => {
         if (data === "[DONE]") continue
         const obj = JSON.parse(data)
         if (obj.error) throw new Error(obj.error.message || "生成失败")
+        if (obj.fold) {
+          if (!current) {
+            current = { id: crypto.randomUUID().replace(/-/g, ""), title: "", created: Math.floor(Date.now() / 1000), messages: [] }
+          }
+          current.fold = obj.fold
+          renderLog()
+          continue
+        }
         if (obj.search) {
-          live.query = (obj.search.tool === "web_fetch" ? "正在打开：" : "正在搜索：") + (obj.search.query || "")
+          const label = obj.search.tool === "web_fetch" ? "正在打开：" : (obj.search.tool === "recall" ? "正在查找：" : "正在搜索：")
+          live.query = label + (obj.search.query || "")
           renderLog()
           continue
         }
@@ -396,7 +766,8 @@ document.getElementById("form").addEventListener("submit", async (ev) => {
             role: "tool",
             name: obj.tool_result.name,
             tool_call_id: obj.tool_result.tool_call_id,
-            content: obj.tool_result.content
+            content: obj.tool_result.content,
+            sources: obj.tool_result.sources || []
           })
           live = { content: "", reasoning: "", query: "" }
           renderLog()
@@ -412,34 +783,31 @@ document.getElementById("form").addEventListener("submit", async (ev) => {
     if (live.content || live.reasoning) messages.push({ role: "assistant", content: live.content, reasoning: live.reasoning })
     live = { content: "", reasoning: "", query: "" }
     await save()
-    renderLog()
   } catch (e) {
     if (e.name === "AbortError") {
       if (!saveOnAbort) return
       if (live.content) messages.push({ role: "assistant", content: live.content, reasoning: live.reasoning })
       live = { content: "", reasoning: "", query: "" }
       try { await save() } catch (_) {}
-      renderLog()
     } else {
       live = { content: "", reasoning: "", query: "" }
       messages.push({ role: "assistant", content: "出错了：" + e.message })
       try { await save() } catch (_) {}
-      renderLog()
     }
   } finally {
     ctrl = null
     setBusy(false)
+    renderLog()
   }
 })
 
+loadKatex()
 fetch("/health").then(r => r.json()).then(h => {
-  if (h.context) context = h.context
   if (typeof h.top_p === "number") topP = h.top_p
   if (!localStorage.getItem("tokenrush.temperature") && typeof h.temperature === "number") {
     temp.value = String(h.temperature)
     tempv.textContent = Number(temp.value).toFixed(1)
   }
-  refreshWarn()
 }).catch(() => {})
 
 loadCatalog().then(() => { if (catalog.length) return open(catalog[0].id) })

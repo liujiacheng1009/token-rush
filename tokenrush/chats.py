@@ -96,6 +96,14 @@ class ChatStore:
                     item["name"] = m["name"]
                 if isinstance(m.get("tool_call_id"), str):
                     item["tool_call_id"] = m["tool_call_id"]
+                sources = []
+                for s in m.get("sources") or []:
+                    if isinstance(s, dict) and isinstance(s.get("url"), str) and s["url"].startswith("https://"):
+                        sources.append({"title": s.get("title") if isinstance(s.get("title"), str) else s["url"], "url": s["url"]})
+                    if len(sources) >= 5:
+                        break
+                if sources:
+                    item["sources"] = sources
             out.append(item)
         return out
 
