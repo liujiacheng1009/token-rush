@@ -31,7 +31,7 @@ from .chat import (OutputParser, StopFilter, from_anthropic, from_openai, render
                    tools_from_openai)
 from .chats import ChatError, ChatStore, default_chats_path
 from .recall import asks_about_past, recall, shorten_tool
-from .fsview import FsError, inside, list_dir, read_text, write_text
+from .fsview import FsError, inside, list_dir, read_text, run_git, write_text
 from .search import backend_name, web_fetch, web_search
 
 _SEAT_PASSWORD = "bestcalib"
@@ -87,6 +87,11 @@ _CODE_TOOLS = [
         "description": "Write a text file inside the opened project, replacing its contents. path is absolute.",
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
+    {"type": "function", "function": {
+        "name": "git",
+        "description": "Run one git command in the opened project. args is the list after git, such as [\"status\"] or [\"commit\", \"-m\", \"msg\"].",
+        "parameters": {"type": "object", "properties": {
+            "args": {"type": "array", "items": {"type": "string"}}}, "required": ["args"]}}},
 ]
 _FOLD_NOTE = "更早的内容已收成摘要（模型看不到被收起的原文）：\n"
 _SUMMARY_SYSTEM = "把更早的对话收成一段摘要，保留用户定下的数字和决定。只输出摘要，不要调用工具。"
@@ -587,11 +592,13 @@ def build_app(session: Session, tok, cfg, args):
         page_token = getattr(req.state, "seat_token", None)
         tools = list(_CODE_TOOLS)
         seen = set()
+        git_fails = {}
         stops = body.get("stop") or []
         stops = [stops] if isinstance(stops, str) else list(stops)
         max_new = body.get("max_completion_tokens") or body.get("max_tokens") or args.max_new
         guide = ("你在编辑服务器目录 " + root + "。用 list_dir、read_file、write_file 完成任务，"
                  "path 用这个目录下的绝对路径。同一个路径不要重复调用，不要读 .git。"
+                 "提交、查看状态和推送用 git 工具，args 是 git 后面的参数数组，在这个目录里执行，不要让用户自己去终端跑。"
                  "材料够了就做完，并用中文写出结果。")
         if msgs and msgs[0].get("role") == "system":
             msgs = [dict(msgs[0], content=((msgs[0].get("content") or "") + "\n\n" + guide).strip())] + [dict(m) for m in msgs[1:]]
@@ -634,6 +641,32 @@ def build_app(session: Session, tok, cfg, args):
             fresh = 0
             for call in calls:
                 args_ = call.arguments or {}
+                if call.name == "git":
+                    argv = args_.get("args") if isinstance(args_.get("args"), list) else []
+                    key = ("git", tuple(str(a) for a in argv))
+                    command = next((str(a) for a in argv if not str(a).startswith("-")), "")
+                    if key in seen:
+                        result = "这个 git 命令刚执行过。根据输出把任务做完并写出回复。"
+                    else:
+                        try:
+                            result = await asyncio.to_thread(run_git, root, argv)
+                            seen.add(key)
+                            if command not in ("status", "diff", "log", "show", "rev-parse", "ls-files", "blame", "shortlog"):
+                                seen = {item for item in seen
+                                        if not (isinstance(item, tuple) and item and item[0] == "git" and item != key)}
+                            fresh += 1
+                        except FsError as exc:
+                            result = str(exc)
+                            git_fails[key] = git_fails.get(key, 0) + 1
+                            if git_fails[key] >= 2:
+                                result += "\n不要再重复这条失败的命令，把结果告诉用户。"
+                                seen.add(key)
+                            else:
+                                fresh += 1
+                    executed.append((call, result))
+                    if await req.is_disconnected():
+                        return
+                    continue
                 path = os.path.normpath(str(args_.get("path") or ""))
                 key = (call.name, path, str(args_.get("content") or "") if call.name == "write_file" else "")
                 in_git = ".git" in path.split(os.sep)
@@ -667,8 +700,11 @@ def build_app(session: Session, tok, cfg, args):
                          "tool_calls": [{"name": c.name, "arguments": c.arguments} for c, _ in executed]})
             for call, result in executed:
                 msgs.append({"role": "tool", "content": result})
-                yield ("tool_result", {"name": call.name, "path": str((call.arguments or {}).get("path") or ""),
-                                       "content": result})
+                payload = {"name": call.name, "path": str((call.arguments or {}).get("path") or ""),
+                           "content": result}
+                if call.name == "git":
+                    payload["args"] = [str(a) for a in ((call.arguments or {}).get("args") or [])]
+                yield ("tool_result", payload)
             if fresh == 0:
                 tools = []
 

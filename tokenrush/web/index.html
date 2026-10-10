@@ -1770,7 +1770,7 @@ document.getElementById("code-form").addEventListener("submit", async (ev) => {
       body: JSON.stringify({
         model: "token-rush", stream: true, temperature: 0.7, code_tools: true, workspace: folder,
         messages: [
-          { role: "system", content: "你是这台机器上的 token-rush。当前编辑器打开的目录是 " + folder + "。用 list_dir、read_file、write_file 把任务做完，同一个路径不要重复调用，不要读 .git。材料够了就停止调用工具，用中文写出结果。不能执行 git；用户要提交时，写出要在终端里运行的命令。不要改成别的路径。用户附上的代码用 文件:行号 标出，引用代码时沿用同样的 文件:行号。" },
+          { role: "system", content: "你是这台机器上的 token-rush。当前编辑器打开的目录是 " + folder + "。用 list_dir、read_file、write_file 把任务做完，同一个路径不要重复调用，不要读 .git。提交、查看状态和推送用 git 工具在这个目录里执行，不要把命令交给用户去终端跑。材料够了就停止调用工具，用中文写出结果。不要改成别的路径。用户附上的代码用 文件:行号 标出，引用代码时沿用同样的 文件:行号。" },
           ...codeMessages.slice(-16).map(m => ({ role: m.role, content: m.role === "user" ? codePrompt(m.content, m.cites || []) : m.content }))
         ]
       })
@@ -1824,7 +1824,9 @@ document.getElementById("code-form").addEventListener("submit", async (ev) => {
         if (obj.tool_result) {
           const path = obj.tool_result.path || ""
           const base = path.split("/").filter(Boolean).pop() || path
-          const label = obj.tool_result.name === "list_dir" ? "列出 " + path : obj.tool_result.name === "write_file" ? "写入 " + base : "读取 " + base
+          const name = obj.tool_result.name
+          const gitArgs = (obj.tool_result.args || []).join(" ")
+          const label = name === "list_dir" ? "列出 " + path : name === "write_file" ? "写入 " + base : name === "git" ? "git " + gitArgs : "读取 " + base
           const step = document.createElement("div")
           step.textContent = label
           body._steps.append(step)
@@ -1835,7 +1837,7 @@ document.getElementById("code-form").addEventListener("submit", async (ev) => {
       }
     }
     if (!shown) {
-      shown = body._steps.childElementCount ? "文件看过了，但没有写出回复。这边不能执行 git，提交要在终端里做。" : "没有收到文字"
+      shown = body._steps.childElementCount ? "命令跑过了，但没有写出回复。" : "没有收到文字"
       body.textContent = shown
     }
     codeMessages.push({ role: "assistant", content: shown })

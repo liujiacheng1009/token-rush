@@ -1,7 +1,9 @@
 """Read and write text files for the code page. Paths stay under the home directory,
-or under TOKENRUSH_FS_ROOTS when a test sets it.
+or under TOKENRUSH_FS_ROOTS when a test sets it. Git runs only inside the opened
+project, and only as the git commands the code page is allowed to use.
 """
 import os
+import subprocess
 
 _MAX_BYTES = 1_000_000
 _LIST_CAP = 500
@@ -101,3 +103,53 @@ def write_text(path: str, content: str, root: str) -> str:
     with open(real, "w", encoding="utf-8") as fh:
         fh.write(content)
     return real
+
+
+_GIT_OK = frozenset({
+    "status", "diff", "log", "show", "add", "commit", "push", "pull", "fetch",
+    "branch", "checkout", "switch", "restore", "reset", "merge", "rebase",
+    "stash", "tag", "rm", "mv", "remote", "rev-parse", "ls-files", "config",
+    "init", "clean", "cherry-pick", "revert", "blame", "shortlog",
+})
+_GIT_BLOCK = ("-C", "--git-dir", "--work-tree", "--exec-path", "-c", "--config-env")
+_GIT_CONFIG_BLOCK = ("alias.", "core.sshcommand", "core.hookspath", "core.fsmonitor", "core.pager")
+
+
+def run_git(root: str, args: list) -> str:
+    """Run one git command with the opened project as its working directory."""
+    base = resolve(root)
+    if not isinstance(args, list) or not args or not all(isinstance(a, str) and a for a in args):
+        raise FsError("git 需要一组参数")
+    if len(args) > 32 or any(len(a) > 4000 for a in args):
+        raise FsError("git 参数太多")
+    for arg in args:
+        if any(arg == flag or arg.startswith(flag + "=") for flag in _GIT_BLOCK):
+            raise FsError("只能在当前打开的目录里执行 git")
+        if os.path.isabs(arg):
+            inside(arg, base)
+    command = next((arg for arg in args if not arg.startswith("-")), "")
+    if command not in _GIT_OK:
+        raise FsError("不会执行 git " + (command or ""))
+    if command == "config" and any(arg in ("--global", "--system") for arg in args):
+        raise FsError("只能改当前仓库的 git 配置")
+    if command == "config":
+        keys = [arg for arg in args if not arg.startswith("-")]
+        key = keys[0].lower() if keys else ""
+        if key.startswith(_GIT_CONFIG_BLOCK) or key in _GIT_CONFIG_BLOCK:
+            raise FsError("不能改这个 git 配置")
+    env = os.environ.copy()
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_EXEC_PATH"):
+        env.pop(name, None)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    try:
+        proc = subprocess.run(
+            ["git", *args], cwd=base, env=env, capture_output=True, text=True, timeout=120,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise FsError("git 超时") from exc
+    out = "\n".join(part for part in ((proc.stdout or "").strip(), (proc.stderr or "").strip()) if part)
+    if len(out) > _READ_CAP:
+        out = out[:_READ_CAP] + "\n…（已截断）"
+    if proc.returncode != 0:
+        raise FsError(out or f"git 退出码 {proc.returncode}")
+    return out or "完成"
