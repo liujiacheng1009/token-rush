@@ -1,0 +1,38 @@
+{
+  "name": "chat",
+  "displayName": "token-rush",
+  "description": "Add the editor or terminal selection to the token-rush chat.",
+  "version": "0.0.1",
+  "publisher": "tokenrush",
+  "engines": { "vscode": "^1.101.0" },
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "tokenrush.addSelection",
+        "title": "把选中代码加入 token-rush"
+      },
+      {
+        "command": "tokenrush.addTerminal",
+        "title": "把选中输出加入 token-rush"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "tokenrush.addSelection",
+          "when": "editorHasSelection",
+          "group": "navigation@20"
+        }
+      ],
+      "terminal/context": [
+        {
+          "command": "tokenrush.addTerminal",
+          "when": "terminalTextSelected",
+          "group": "navigation@20"
+        }
+      ]
+    }
+  }
+}

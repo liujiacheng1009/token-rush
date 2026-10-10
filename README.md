@@ -3,137 +3,135 @@
     <source media="(prefers-color-scheme: dark)" srcset="docs/img/logo_dark.png">
     <img src="docs/img/logo.png" alt="Token Rush" width="180">
   </picture>
-  <h1>Token Rush</h1>
-  <p><em>The fastest inference engine for Qwen3.8-27B on one RTX 5090 — built for one user, one card, one stream.</em></p>
+  <h1>在一张 RTX 5090 上部署 Qwen3.8-27B</h1>
+  <p>浏览器里的聊天机器人，和带对话的代码编辑器。一次一个用户。底下是 Token Rush，给这个模型和这张卡写的推理引擎。</p>
 </div>
 
-## What you get
+打开一个页面，顶部在「对话」和「写代码」之间切换。生成始终是这一条流：权重留在这张 5090 上，一段对话的前缀留在显存里，下一句只计算新增的 token。
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/decode_vs_context_dark.svg">
-  <img src="docs/img/decode_vs_context.svg" alt="Single-stream decode speed vs. context length: Token Rush against llama.cpp, vLLM, SGLang and ExLlamaV3 on one RTX 5090">
-</picture>
+<p>
+  <img src="docs/img/chat.png" alt="对话页：左侧是对话列表，右侧是带 Markdown 的回复" width="920">
+</p>
+<p>
+  <img src="docs/img/code.png" alt="写代码：左边是浏览器里的 VS Code，右边是同一个模型的对话，选中的代码以文件名和行号出现" width="920">
+</p>
 
-Every engine on the same card, the same day, the same prompts. Short context, greedy, tokens per second:
+## 对话
 
-| engine, its fastest configuration | essay | code | math |
-|---|---|---|---|
-| **Token Rush** (DFlash2 draft, in-graph) | **229** | **358** | **379** |
-| SGLang + DSpark | 106 | 138 | 207 |
-| ExLlamaV3 + MTP ×2 | 132 | 142 | 166 |
-| ollama (its default MTP chain) | 129 | 135 | 166 |
-| llama.cpp + MTP | 124 | 115 | 160 |
-| vLLM (raw; its speculative paths are slower) | 78 | 78 | 78 |
+左侧是对话列表，右侧是流式回复。记录写在 `~/.local/share/tokenrush/chats.json`，刷新之后还在。思考默认关着，页面上可以打开，思考和正文分开显示。同一时间只有一个请求，第二个排队。
 
-At 200k tokens of context it still decodes prose at 200–220 tok/s with speculation and 70 tok/s without, against 60 for the next best engine. The full 256k window fits and works: needle retrieval at 262k tokens, 26 GB of VRAM.
+**连网。** 权重里没有今天的新闻。问到需要外界信息的事时，模型调用 `web_search`，服务去查，需要正文时再调用 `web_fetch` 打开结果页，然后根据查到的文字写答案，并带上这次返回的来源。查询只发这一句，不把整段聊天交给搜索引擎。启动前设置 `SEARXNG_URL`（自建 SearXNG，请求 `{url}/search?q=&format=json`）或 `BRAVE_API_KEY`。两个都没设时，这一轮会告诉模型没有配置搜索。一轮最多 8 次这类调用。搜索发生在两次解码之间，不进 CUDA graph。
 
-It is a server too. `python -m tokenrush.serve` speaks the OpenAI and Anthropic APIs, keeps the conversation resident so a turn costs only its new tokens, and Claude Code runs on it end to end.
+**记忆。** 同一段对话里，前面说过的话都在：浏览器每次把整段再发上去，显存里对得上的前缀留着，只计算新增的 token。换一段新对话时，不带上其它对话，模型也不会自己去翻旧记录。只有当你问起以前某段说过什么，它才调用 `recall`，在 `chats.json` 里按词查找。摘录和当前这段冲突时，以当前这段为准，并注明旧记录里的不同说法。一段对话超过窗口一半时，更早的回合收成摘要再继续，文件里仍是全文。
 
-## What you lose
+## 写代码
 
-- **One stream.** Batch size 1, one request at a time; a second client queues. Throughput under load was traded for latency, deliberately and everywhere: no scheduler, no paged KV, no batching in any kernel.
-- **4.25 bits per weight.** The weights are int4 with a 128-group scale and minimum, calibrated with GPTQ. Against bf16: mean KL 0.023, top-1 agreement 94.2%, WikiText-2 perplexity 6.37 vs 6.26, GSM8K 97.0% vs 96.0%. The best 4-bit quantization we know of (ExLlamaV3) is at KL 0.013; ours is not there. Details, rivals and the recipe in [Quantization](#quantization).
-- **One model, one card, text only.** Qwen3.8-27B's text path on an RTX 5090 (`sm_120`); the vision tower is dropped. Nothing is generic.
+点「写代码」之后，左边是浏览器里的 VS Code（[code-server](https://github.com/coder/code-server)），右边是同一个模型的对话。编辑器打开哪个目录，对话就只动那个目录：可以列出目录、读文件、改文件。编辑器自己负责文件树、搜索、Git 界面和终端。这边不做 Tab 补全，不加载第二份权重，也不做语言服务或调试器。
 
-## Usage
+**Git。** 提交、看状态、推送由模型调用 `git` 完成，在打开的目录里执行，参数是 `git` 后面的那一串，例如 `["status"]`、`["add", "app.py"]`、`["commit", "-m", "说明"]`。页面上每次调用显示成一行，例如 `git status`。允许的是日常子命令：`status`、`diff`、`log`、`add`、`commit`、`push`、`pull`、`branch`、`checkout` 等。工作目录固定在打开的文件夹；`-C`、`--git-dir`、`clone`、改全局配置都会拒绝。同一条命令刚跑过就不会再跑一遍，避免停在重复调用上。
 
-An RTX 5090 with a CUDA 13 driver, and [`uv`](https://docs.astral.sh/uv/). The first command creates the environment (torch cu130, Triton, the GDN kernels) and the first run downloads the checkpoint (17 GB) and the DFlash2 draft (3.9 GB) into the Hub cache:
+**选中加入对话。** 在编辑器里选中代码，右键「把选中代码加入 token-rush」；在终端里选中输出，右键「把选中输出加入 token-rush」。选区出现在输入框上方，代码显示成 `文件:行号`（多行是 `文件:起-止`），终端显示成 `shell: 终端名`。发送时这段文字连同你写的问题一起交给模型。两条命令来自 `extensions/tokenrush-chat`，装上并重新加载窗口之后才有。
 
-```bash
-uv run python -m tokenrush.run --chat --prompt "Explain speculative decoding in three sentences."
-```
+## 部署
 
-Serve. OpenAI Chat / Completions and Anthropic Messages on one port; Claude Code needs two environment variables:
+一张 RTX 5090，CUDA 13 的驱动，以及 [`uv`](https://docs.astral.sh/uv/)。在仓库根目录：
 
 ```bash
 uv run python -m tokenrush.serve --port 8000
 ```
 
+第一次运行会把正文权重（17 GB）和 DFlash2 草稿（3.9 GB）下到 Hugging Face 缓存。终端打印页面地址之后再打开浏览器，冷启动要加载权重并捕获 CUDA graph。默认地址是 `http://127.0.0.1:8000/`。
+
+默认上下文是 256k，两份草稿一起大约 30 GB。这张卡上还有别的程序时，把窗口收小：
+
+```bash
+uv run python -m tokenrush.serve --max-len 32768 --port 8000
+```
+
+写代码需要 [code-server](https://github.com/coder/code-server) 4.141 或更新版本，只听环回地址。页面把 `/vscode/` 转到 `TOKENRUSH_VSCODE_UPSTREAM`，默认是 `http://127.0.0.1:8088`。
+
+```bash
+code-server \
+  --bind-addr 127.0.0.1:8088 --auth none \
+  --disable-telemetry --disable-update-check --disable-workspace-trust \
+  /path/to/the/project
+```
+
+在 VS Code 或 Cursor 的集成终端里启动时，先执行 `unset VSCODE_IPC_HOOK_CLI`，否则 code-server 会立刻退出。换端口时，`--bind-addr` 和 `TOKENRUSH_VSCODE_UPSTREAM` 写成同一个地址。
+
+选中代码或终端输出后的两条右键命令来自 `extensions/tokenrush-chat`。复制进 code-server 的扩展目录，再在编辑器里执行 **Developer: Reload Window**：
+
+```bash
+ext="${XDG_DATA_HOME:-$HOME/.local/share}/code-server/extensions/tokenrush.chat-0.0.1"
+mkdir -p "$(dirname "$ext")"
+cp -a extensions/tokenrush-chat "$ext"
+```
+
+扩展默认把选区 `POST` 到 `http://127.0.0.1:8000/ide/cite`。服务改用 HTTPS 时，启动 code-server 之前设置 `TOKENRUSH_ORIGIN` 为同一个源。自签证书的环回连接是允许的。
+
+终端里粘贴依赖浏览器剪贴板，剪贴板只在 HTTPS 页面里可用。证书和私钥一起给出时，页面走 HTTPS：
+
+```bash
+uv run python -m tokenrush.serve --port 8000 \
+  --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem
+```
+
+同一时间只有一个浏览器占用页面。第二个要输入 `tokenrush/serve.py` 里的 `_SEAT_PASSWORD` 才能进入，进入后会挤掉前一个。放到别人能打开的地址之前，先改这个密码。
+
+同一端口也说 OpenAI Chat Completions 和 Anthropic Messages。Claude Code 把地址指过来即可，工具在它自己的进程里执行，生成仍是这一条流：
+
 ```bash
 ANTHROPIC_BASE_URL=http://127.0.0.1:8000 ANTHROPIC_AUTH_TOKEN=anything claude
 ```
 
-`--draft mtp` switches to the shipped MTP head as the draft (the default picks it for Chinese prompts), `--no-spec` / `--draft raw` turns speculation off, `--max-len` sets the context window (256k needs ~30 GB with both drafts). More in [docs/serving.md](docs/serving.md).
+协议、座位和长对话怎么压实，见 [docs/serving.md](docs/serving.md)、[docs/chatbot.md](docs/chatbot.md)、[docs/memory.md](docs/memory.md)、[docs/web-search.md](docs/web-search.md)。
 
-## How
+## 底层：Token Rush
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/progress_dark.svg">
-  <img src="docs/img/progress.svg" alt="Decode speed through the build: raw decode and speculative tok/s on essay, code and math, step by step">
-</picture>
+上面这一页没有自己的推理。`tokenrush.serve` 把引擎留在显存里，页面只是它的一个客户端。
 
-The engine is about 6,000 lines of PyTorch, Triton and one CUDA kernel, written for this one model and card. The steps that moved the number (every step, with what it measured, in [docs/progress.md](docs/progress.md)):
+Token Rush 只做一件事：让 **Qwen3.8-27B 的文本路径在一张 RTX 5090 上、一次一条请求** 时出字尽量快。通用服务引擎按并发吞吐来设计，连续批调度、分页 KV、动态形状、多进程 API 在一条流上是纯开销。这里换成连续预分配的 KV、进程内执行，以及把整步 decode 录进一张 CUDA graph。48 层 Gated DeltaNet 的循环状态不随上下文变长，只有 16 层注意力为长度付钱。视觉塔丢掉，不服务。
 
-| step | what changed | tok/s |
-|---|---|---|
-| 2 | the model as plain functions over explicit state: contiguous KV, FP32 recurrent state, int4 weights dequantized on the fly | 3 |
-| 3 | own int4 GEMV in Triton, projections fused | 36 |
-| 4 | **the whole decode step in one CUDA graph**: 64 layers, lm_head, sampling, the token fed back on device | 68 |
-| 6 | the 48 Gated DeltaNet layers each as one fused kernel (conv, gating, delta rule, norm, output gate) | 83 |
-| 7 | fused flash-decoding attention over the live length, no context buckets | 100 |
-| 8–9 | split-K GEMV with partials summed in the norm; FP8 KV cache and a prefill attention kernel, so 256k fits | 102 |
-| 13–14 | **speculative decoding inside the graph**: the MTP head's draft chain, an M-row verify step, accept and commit on device | 183 / 254 / 258 |
-| 20 | the draft reads a 128k-row slice of lm_head instead of all 248k | 186 / 261 / 263 |
-| 25–27 | **DFlash2 as the draft**: 7 tokens per draft forward from a block-diffusion model, on our kernels, int4, ring cache | 217 / 355 / 350 |
-| 28 | a Marlin-class int4 GEMM for the verify step: verifying 7 tokens costs 1.13× one raw step | 224 / 373 / 373 |
+一张卡、同一天、同一批 prompt 上测到的速度（短上下文，贪心，tok/s）：
 
-Three of them carry most of the result. The CUDA graph removed 9 ms of kernel-launch time from a 10 ms budget — the hybrid architecture's 48 recurrent layers are chains of small ops that no engine with dynamic batching can capture whole. Speculation is where the headline comes from: at batch size 1 the tensor cores are idle, so verifying seven draft tokens costs little more than decoding one, and general engines cannot afford that trade under batching. And every kernel was tuned against measured byte counts on this card, because nothing else feeds a Blackwell's bandwidth.
+| 引擎及其最快配置 | 散文 | 代码 | 数学 |
+|---|---|---|---|
+| **Token Rush**（DFlash2 草稿，在图里） | **229** | **358** | **379** |
+| SGLang + DSpark | 106 | 138 | 207 |
+| ExLlamaV3 + MTP ×2 | 132 | 142 | 166 |
+| ollama（默认 MTP） | 129 | 135 | 166 |
+| llama.cpp + MTP | 124 | 115 | 160 |
+| vLLM（原始 decode；它自己的投机更慢） | 78 | 78 | 78 |
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/wall_fraction_dark.svg">
-  <img src="docs/img/wall_fraction.svg" alt="Raw decode as a fraction of the bandwidth wall, every engine, vs. context length">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/decode_vs_context_dark.svg">
+  <img src="docs/img/decode_vs_context.svg" alt="单流 decode 速度随上下文长度的变化：Token Rush 与 llama.cpp、vLLM、SGLang、ExLlamaV3，同一张 RTX 5090">
 </picture>
 
-Single-stream decode is bound by memory bandwidth: every step reads all the weights plus the KV cache once, so `tok/s ≈ 1701 GB/s ÷ bytes per step`, where 1701 is the measured read bandwidth of the card. At 4.25 bits the weights are 14.3 GB, a ceiling of 119 tok/s at empty context. The chart above is each engine's raw decode as a fraction of *its own* ceiling, so it measures the engine and not the quantization: what is left after launch overhead, synchronization and kernels that do not stream at full rate. We hold 80–85% and rise with context; llama.cpp falls to 54% at 240k because its attention path degrades with length, while the recurrent layers — 48 of the 64 — carry constant-size state and cost nothing extra.
+200k 上下文时，带投机的散文仍然在每秒 200–220 token，不带投机约 70；下一家大约 60。256k 窗口放得下，也能用：262k 处的 needle 能取回，峰值约 26 GB。
 
-Two things follow. Raw decode was close to solved before we started: vLLM sits at 75–81% and cuBLAS alone streams at 96%, so the raw margin is a few points of the wall plus reading fewer bytes. The only way *through* the wall is to emit more than one token per step, which is what the top half of the first chart shows.
+速度主要来自三处。整步 CUDA graph 去掉了 48 层小算子的启动开销。投机解码在 batch size 为 1 时几乎白送：张量核本来空着，验 7 个草稿大约只比解码 1 个 token 多 13% 的时间。kernel 按这张卡的实测读带宽 1701 GB/s 来写。权重是 4.25 bit 的 int4（group 128，GPTQ 加 MSE），正文 14.3 GB 量级；相对 bf16 的平均 KL 是 0.023，还没有到 ExLlamaV3 的 0.013。
 
-## Quantization
+数字、对手配方和逐步记录在 [docs/baselines.md](docs/baselines.md)、[docs/progress.md](docs/progress.md)、[docs/quantization.md](docs/quantization.md)。引擎在解决什么问题，见 [docs/overview.md](docs/overview.md)。
 
-Bits per weight is the second-largest lever after speculation: it sets the ceiling. The format is group-wise asymmetric int4, 128 weights per bf16 scale and minimum, 4.25 bits per weight on the 401 large matrices; embeddings, norms and the small projections stay bf16. The format was frozen on day 2 and never changed, so every kernel, graph and draft is independent of how the codes are chosen, and a better quantizer is a drop-in.
+常用开关：`--draft auto` 在中文 prompt 上改用模型自带的 MTP head，其它用 DFlash2；`--draft raw` 关掉投机；`--max-len` 是上下文窗口。
 
-The codes are chosen by GPTQ — 256 calibration sequences of 2048 tokens (WikiText-103, torch's sources, GSM8K train), layers quantized sequentially, `lm_head` last on the quantized body's hidden states — plus an MSE range search per group that clips a few outliers to buy precision for the rest. About 200 lines, 20 minutes on one card.
+## 不做的事
 
-Measured against bf16 logits over 81,920 positions of held-out text (WikiText-2 test, code, math), the same forward for every candidate:
+- 一次一条请求。没有连续批、没有分页 KV、没有为了吞吐做的调度。
+- 一个模型、一张卡、只有文本。Qwen3.8-27B 的文本路径，`sm_120`。
+- 写代码时不做 Tab 补全，不实现 `/v1/responses`，不把 code-server 或扩展的配置提交进仓库。
 
-| checkpoint | bits/weight | KL to bf16 | top-1 | WikiText-2 PPL (bf16 6.255) |
-|---|---|---|---|---|
-| llama.cpp UD-Q4_K_M | 4.80 | 0.0093 | 0.966 | 6.270 |
-| ExLlamaV3 4.00 bpw | 4.10 | 0.0128 | 0.960 | 6.274 |
-| **Token Rush, GPTQ + MSE** | **4.25** | **0.0232** | 0.942 | 6.365 |
-| NVFP4 (QUASAR QAT) | 5.07 | 0.0231 | 0.943 | 6.369 |
-| RedHatAI INT4 (AWQ + GPTQ) | 4.71 | 0.0458 | 0.924 | 6.460 |
-| Token Rush, round-to-nearest | 4.25 | 0.0546 | 0.905 | 6.495 |
-
-Calibration took KL from 0.055 to 0.023; the gap to ExLlamaV3 is the uniform 16-level grid itself, which its trellis code avoids at the cost of a different kernel. GSM8K through the engine: 194/200, against 192/200 for bf16.
-
-The checkpoint is published at [`zyhector/Qwen3.8-27B-TokenRush-int4g128`](https://huggingface.co/zyhector/Qwen3.8-27B-TokenRush-int4g128) and is what the engine downloads. To rebuild it from the bf16 weights, or to measure another quantization on the same yardstick:
-
-```bash
-bash scripts/quantize/build.sh
-```
-
-The full thread — the yardstick, the rivals' formats, what each refinement was worth — is [docs/quantization.md](docs/quantization.md).
-
-## Correctness
-
-Two gates. The bf16 path matches HF transformers token for token on greedy decoding; every fused kernel is differential-tested against a torch reference; CUDA-graph replay matches eager execution; and speculative greedy output equals raw greedy output exactly, which is the one check that is truly exact. Long context is verified by needle retrieval at 131k and 262k. `pytest tests/` runs the 65 tests; the kernel tests need the card, the protocol and session tests do not.
-
-## Numbers
-
-Every number here comes from one machine in one sitting, 2026-09-12, every rival re-run from its own recipe the same day: the logs are in [results/2026-09-12-machine-59052/](results/2026-09-12-machine-59052/), the tables are generated from them by `scripts/sweep_table.py` and `scripts/matrix_table.py`, the figures by `scripts/plot_sweep.py` and `scripts/plot_progress.py`. The rivals' versions, flags and traps are in [docs/baselines.md](docs/baselines.md); the machine in [docs/environment.md](docs/environment.md); the step-by-step record in [docs/progress.md](docs/progress.md).
-
-## Layout
+## 目录
 
 | | |
 |---|---|
-| `tokenrush/` | the engine: `model.py` (the text path), `fused.py` / `ops.py` (Triton kernels), `csrc/` (the Marlin port), `spec.py` / `mtp.py` / `dflash.py` (speculation), `gptq.py` / `quant.py` (quantization), `run.py`, `serve.py` |
-| `bench/` | the measurements: decode, context sweeps, quality, needle, GSM8K |
-| `scripts/` | rival benches, the quantization recipe, table and figure generators |
-| `tests/` | the differential and protocol tests |
-| `docs/` | baselines, environment, progress, quantization, serving, traps. A reading order is in [docs/overview.md](docs/overview.md#阅读顺序) |
-| `results/` | raw logs of every reported run |
+| `tokenrush/` | 引擎和服务。`model.py` 是文本路径，`fused.py` / `ops.py` 是 Triton kernel，`csrc/` 是 Marlin，`spec.py` / `mtp.py` / `dflash.py` 是投机，`serve.py` 是页面和 API，`web/index.html` 是聊天和写代码那一页 |
+| `bench/` | 速度、质量和 needle |
+| `tests/` | 协议和差分测试。`pytest tests/`；kernel 测试需要这张卡 |
+| `docs/` | 部署之后的行为、基线、量化和逐步记录。阅读顺序在 [docs/overview.md](docs/overview.md#阅读顺序) |
+| `results/` | 上面那张表所依据的原始日志 |
 
-## Author
+## 致谢
 
-I am an MS in Computer Science student at USC, graduating in June 2027, and I am looking for AI infrastructure roles — inference engines, kernels, serving systems — in the Bay Area, Seattle or Los Angeles. If this is the kind of work your team does, or you know a team it would fit, I would be glad to hear from you on [LinkedIn](https://www.linkedin.com/in/hectorzhu/).
+推理引擎 [Token Rush](https://github.com/zyhector/token-rush) 是 [Hector Zhu](https://www.linkedin.com/in/hectorzhu/) 的开源项目。本仓库在它上面做聊天页面和代码编辑器，权重用的是他发布的 [`zyhector/Qwen3.8-27B-TokenRush-int4g128`](https://huggingface.co/zyhector/Qwen3.8-27B-TokenRush-int4g128)。
